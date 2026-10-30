@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.bling.memreaper</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>/Users/jlenteria/Project/mem_reaper.py</string>
+		<string>--service</string>
+		<string>--threshold-mb</string>
+		<string>3072</string>
+		<string>--interval</string>
+		<string>30</string>
+		<string>--dialog-timeout</string>
+		<string>45</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/jlenteria/Library/Logs/mem_reaper.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/jlenteria/Library/Logs/mem_reaper.log</string>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+</dict>
+</plist>

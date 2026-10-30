@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="teal" x1="219" y1="220" x2="805" y2="855" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6EE7D8"/>
+      <stop offset="1" stop-color="#12A594"/>
+    </linearGradient>
+    <mask id="wrench" maskUnits="userSpaceOnUse">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <rect x="478" y="300" width="68" height="176" rx="30" fill="#000"/>
+    </mask>
+  </defs>
+
+  <!-- logo.svg's mark, scaled to 70% and centred so it survives the adaptive
+       icon mask (only the middle 61% of the canvas is guaranteed visible). -->
+  <g transform="translate(512 512) scale(0.70) translate(-512 -537)">
+    <path d="M262 812 L262 470 A250 250 0 0 1 762 470 L762 812"
+          fill="none" stroke="url(#teal)" stroke-width="86" stroke-linecap="round"/>
+    <g mask="url(#wrench)" fill="#F4F7FA">
+      <circle cx="512" cy="470" r="122"/>
+      <rect x="474" y="470" width="76" height="300" rx="38"/>
+    </g>
+  </g>
+</svg>

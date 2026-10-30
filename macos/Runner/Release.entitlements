@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- No com.apple.security.app-sandbox: the tool has to write
+     ~/Library/LaunchAgents and run launchctl bootstrap, both of which a
+     sandboxed process cannot do. Consequence: this ships as a Developer ID /
+     locally run app, not a Mac App Store build. -->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

@@ -1,0 +1,79 @@
+gui/501/com.bling.memreaper = {
+	active count = 1
+	path = /Users/jlenteria/Library/LaunchAgents/com.bling.memreaper.plist
+	type = LaunchAgent
+	state = running
+
+	program = /usr/bin/python3
+	arguments = {
+		/usr/bin/python3
+		/Users/jlenteria/Project/mem_reaper.py
+		--service
+		--threshold-mb
+		3072
+		--interval
+		30
+		--dialog-timeout
+		45
+	}
+
+	stdout path = /Users/jlenteria/Library/Logs/mem_reaper.log
+	stderr path = /Users/jlenteria/Library/Logs/mem_reaper.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.TL5n4GfamF/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		XPC_SERVICE_NAME => com.bling.memreaper
+	}
+
+	domain = gui/501 [100019]
+	asid = 100019
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	pid = 68678
+	immediate reason = speculative
+	forks = 2
+	execs = 3
+	initialized = 1
+	trampolined = 1
+	started suspended = 0
+	proxy started suspended = 0
+	checked allocations = 0 (queried = 1)
+	checked allocations reason = no host
+	checked allocations flags = 0x0
+	last exit code = (never exited)
+
+	resource coalition = {
+		ID = 24610
+		type = resource
+		state = active
+		active count = 1
+		name = com.bling.memreaper
+	}
+
+	jetsam coalition = {
+		ID = 24611
+		type = jetsam
+		state = active
+		active count = 1
+		name = com.bling.memreaper
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+	sanitizer flags = 0x0
+
+	properties = keepalive | runatload | inferred program
+}

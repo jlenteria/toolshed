@@ -1,0 +1,25 @@
+name: toolshed
+description: "A cross-platform developer console for the tools running on your machine."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+# Deliberately no third-party dependencies: everything is dart:io Process.run
+# (macOS) or a MethodChannel (Android), so there is nothing to drift upstream.
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo.png
+    - docs/banks/bpi.jpg
