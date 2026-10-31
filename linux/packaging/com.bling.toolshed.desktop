@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=toolshed
+GenericName=Developer Console
+Comment=Manage the developer tools running on this machine
+Exec=toolshed
+Icon=com.bling.toolshed
+Terminal=false
+Categories=Development;System;Utility;
+Keywords=toolshed;developer;process;port;fan;startup;memory;
+StartupNotify=true
+StartupWMClass=com.bling.toolshed

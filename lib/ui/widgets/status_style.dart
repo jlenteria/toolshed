@@ -6,6 +6,7 @@ import '../../models/agent_status.dart';
 IconData toolIcon(String id) => switch (id) {
   'mem_reaper' => Icons.memory_rounded,
   'port_warden' => Icons.lan_outlined,
+  'dev_sweeper' => Icons.delete_sweep_outlined,
   'fan_ctl' => Icons.air_rounded,
   'app_lock' => Icons.lock_outline_rounded,
   _ => Icons.handyman_outlined,

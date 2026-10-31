@@ -3,6 +3,7 @@ import '../models/tool_config.dart';
 import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/lock_agent.dart';
+import 'dev_sweeper/sweep_target.dart';
 import 'fan_ctl/fan_daemon.dart';
 import 'fan_ctl/fan_policy.dart';
 import 'fan_ctl/fan_telemetry.dart';
@@ -87,6 +88,22 @@ abstract class ProcessReaper implements ProcessStopper {
 /// Backends that can list the ports the OS reports as listening.
 abstract class PortInspector {
   Future<List<PortListener>> listening();
+}
+
+/// Backends that can find disposable build caches and move them to the Trash.
+///
+/// The scan is the only source of [SweepTarget]s the screen can select, and the
+/// implementation re-validates each path before moving it: the Trash is
+/// reversible, but a bug that trashed the wrong directory would be the most
+/// expensive mistake this console could make.
+abstract class CacheSweeper {
+  /// Every cache the platform knows about, measured where possible, plus the
+  /// places or measurements that failed.
+  Future<SweepReport> scanCaches();
+
+  /// Moves exactly [targets] to the platform Trash. Never deletes, and never
+  /// walks outside them.
+  Future<SweepOutcome> trashCaches(List<SweepTarget> targets);
 }
 
 /// Backends that drive a fan: read the hardware, and hold or release it.

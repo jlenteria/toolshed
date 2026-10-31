@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/agent_status.dart';
 import '../../models/tool_descriptor.dart';
 import '../../tools/app_lock/lock_screen.dart';
+import '../../tools/dev_sweeper/sweep_screen.dart';
 import '../../tools/fan_ctl/fan_screen.dart';
 import '../../tools/mem_reaper/config_sheet.dart';
 import '../../tools/mem_reaper/ranking_screen.dart';
@@ -432,6 +433,18 @@ class _Controls extends StatelessWidget {
       () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => PortScreen(registry: registry, entry: entry),
+        ),
+      ),
+    );
+
+    addSecondary(
+      ToolAction.showCaches,
+      Icons.delete_sweep_outlined,
+      'Reclaim space',
+      'Build caches and node_modules you can rebuild',
+      () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => SweepScreen(registry: registry, entry: entry),
         ),
       ),
     );

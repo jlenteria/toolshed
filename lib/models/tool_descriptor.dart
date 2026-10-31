@@ -36,6 +36,12 @@ enum ToolAction {
 
   /// List the listening sockets and, where the platform allows, free a port.
   showPorts,
+
+  /// Show the build caches and package stores that can be reclaimed.
+  showCaches,
+
+  /// Move the chosen caches to the Trash. Never a delete.
+  trashCaches,
   openAppInfo,
   requestUsageAccess,
 

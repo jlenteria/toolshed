@@ -8,6 +8,8 @@ import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/app_lock_backend.dart';
 import 'app_lock/lock_agent.dart';
+import 'dev_sweeper/dev_sweeper_backend.dart';
+import 'dev_sweeper/sweep_target.dart';
 import 'fan_ctl/fan_backend.dart';
 import 'fan_ctl/fan_daemon.dart';
 import 'fan_ctl/fan_policy.dart';
@@ -69,6 +71,7 @@ class ToolRegistry extends ChangeNotifier {
   static ToolRegistry _build() => ToolRegistry._([
     ToolEntry(backend: _memReaperBackend()),
     ToolEntry(backend: _portWardenBackend()),
+    ToolEntry(backend: _devSweeperBackend()),
     ToolEntry(backend: _fanBackend()),
     ToolEntry(backend: _appLockBackend()),
   ]);
@@ -129,6 +132,31 @@ class ToolRegistry extends ChangeNotifier {
           '/proc/net/tcp lists sockets without the pids that own them, and '
           'mapping them needs root. It also cannot stop another app. This tool '
           'is for the desktop.',
+    );
+  }
+
+  /// Dev Sweeper needs only the file system and the platform Trash, so every
+  /// desktop gets a real backend. Android gets none: an unrooted app can see
+  /// its own cache and no one else's, which is not the developer caches this
+  /// tool is for.
+  static ToolBackend _devSweeperBackend() {
+    if (Platform.isMacOS) return MacDevSweeperBackend();
+    if (Platform.isLinux) return LinuxDevSweeperBackend();
+    if (Platform.isWindows) return WindowsDevSweeperBackend();
+    return UnsupportedToolBackend(
+      descriptor: const ToolDescriptor(
+        id: kDevSweeperId,
+        name: 'Dev Sweeper',
+        summary:
+            'Finds build caches and node_modules, and moves the ones you pick '
+            'to the Trash.',
+        implPath: 'du · find · Trash',
+      ),
+      reason:
+          'Android gives an app no view of other apps\' caches: an unrooted '
+          'phone exposes only this app\'s own storage. The developer caches '
+          'this tool is for are out of reach, so it is listed rather than '
+          'offering a button that cannot work.',
     );
   }
 
@@ -319,6 +347,39 @@ class ToolRegistry extends ChangeNotifier {
     }
     if (entry.backend case final PortInspector inspector) return inspector;
     throw ToolException('NO_PORTS', entry.capabilities.reason);
+  }
+
+  /// The caches and node_modules as they were measured at scan time. A read, so
+  /// it skips the busy guard; the move goes through it.
+  Future<SweepReport> sweepTargets(String id) => _sweeperAt(id).scanCaches();
+
+  /// Null when the request could not be made at all ([ToolEntry.error] says
+  /// why); otherwise the Trash's own tally, which may contain failures.
+  Future<SweepOutcome?> trashCaches(String id, List<SweepTarget> targets) =>
+      _ask<SweepOutcome>(
+        id,
+        ToolAction.trashCaches,
+        (b) => _sweeper(b, id).trashCaches(targets),
+      );
+
+  CacheSweeper _sweeperAt(String id) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(ToolAction.showCaches)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    return _sweeper(entry.backend, id);
+  }
+
+  CacheSweeper _sweeper(ToolBackend backend, String id) {
+    if (backend case final CacheSweeper sweeper) return sweeper;
+    throw ToolException(
+      'NO_SWEEPER',
+      byId(id)?.capabilities.reason ??
+          'This tool does not reclaim disk space, so nothing was moved.',
+    );
   }
 
   Future<bool> saveConfig(String id, ToolConfig config) =>

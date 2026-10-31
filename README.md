@@ -52,6 +52,31 @@ lives in `stop_policy.dart`; the script still makes the final call. Linux and
 Windows list the whole table because they do not offer the stop, so there is no
 promise to keep.
 
+### dev_sweeper — move the caches you can rebuild to the Trash
+
+**Reclaim space** measures the directories whose loss costs only a rebuild or a
+re-download — Xcode's DerivedData and device support, CoreSimulator's caches,
+CocoaPods and Homebrew, the Gradle, npm, Yarn, pnpm and pub stores, the Go build
+cache, Cargo's registry cache — and finds every `node_modules` under the
+conventional checkout folders. Rows are grouped by the tool that owns them,
+largest first, with a search field and a running total.
+
+Every row is a whole directory, because moving one is a single reversible step
+and a half-deleted cache is worse than a full one. **Moving is the only action,
+and it is a move, not a delete.** macOS asks `NSFileManager` to trash the item,
+so Finder's Put Back knows where it came from; Linux writes the freedesktop
+Trash `files/` and `info/` pair directly, with the `.trashinfo` that makes a
+restore possible; Windows uses the Recycle Bin. The confirmation names the count
+and the size before anything moves, and says plainly that the space comes back
+when the Trash is emptied.
+
+The refusal rules live below the screen, not in it. A path is moved only if the
+scan produced it — a known cache directory or a `node_modules` — and only if it
+is still a real directory that resolves strictly inside your home and is not a
+symbolic link. A stale or hand-edited target gets a reason instead of a move.
+Project sources, Xcode archives, simulator devices and SDKs are not on the
+allowlist and are never measured or offered.
+
 ### fan_ctl — temperature-triggered fan control (macOS)
 
 Set a temperature; below it the fan stays in Apple's own control, at or above it
@@ -195,9 +220,12 @@ make setup        # flutter pub get
 make fanctl       # compile the macOS fan helper and run its policy selfcheck
 make lockd        # compile the macOS lock helper and run its selfcheck
 make run          # flutter run
+make run-macos    # flutter run -d macos (also run-windows, run-linux, run-all)
 make check        # analyze + format check + tests (builds the lock helper first)
 make build        # flutter build macos --release, helpers embedded
 make install-macos  build, then replace and relaunch /Applications/toolshed.app
+make install-linux  install the Linux release build with a menu entry and icon
+make uninstall-linux  remove what install-linux added
 make logo         # re-render the app icons from assets/logo.svg
 ```
 
@@ -263,6 +291,13 @@ lib/
       port_backend.dart       the three desktop scanners; macOS stop via mem_reaper
       stop_policy.dart        which owners mem_reaper refuses, mirrored for the list
       port_screen.dart        its console
+    dev_sweeper/             ditto, for the caches:
+      cache_locations.dart    the allowlist, per platform
+      sweep_target.dart       one directory, its size and what a move reports
+      sweep_parsers.dart      the du, PowerShell and find grammars
+      trash_linux.dart        the freedesktop Trash, written directly
+      dev_sweeper_backend.dart  the scan, the platform Trash, the refusal rules
+      sweep_screen.dart       its console
     fan_ctl/                ditto, for the fan:
       fan_policy.dart         the threshold, the ramp, the lease
       fan_telemetry.dart      fans, sensors and the group maxima
@@ -285,6 +320,8 @@ lib/
 macos/fanctl/main.swift     the SMC, the control law, and the root daemon
 macos/lockd/main.swift      the hash, the guard list, and the watcher
 macos/Helpers/embed_helpers.sh  the build phase that puts both in the bundle
+linux/packaging/com.bling.toolshed.desktop  the menu entry install-linux writes
+linux/runner/resources/app_icon.png         the 256px icon install-linux copies
 docs/banks/bpi.jpg          the support QR, drawn by the Support page
 test/
   fan_ctl/                  policy, protocol, installer, backend, live helper
@@ -292,6 +329,7 @@ test/
   mem_reaper/               launchctl, plist args, plist round trip, live scan,
                             force stop (script and console)
   port_warden/              parsers, three scanners, live lsof, console
+  dev_sweeper/              parsers, locations, Trash, scanners, console
   platform/                 where an installed app looks for its helpers
   fixtures/                 canned `launchctl` output
 ```
@@ -304,10 +342,10 @@ adding a folder and one line in `registry.dart`.
 `ToolBackend` is deliberately small. A tool that can rank memory implements
 `MemoryRanking`, one that can stop a single process implements `ProcessStopper`
 (`ProcessReaper` adds the whole memory scan), one that can list listening
-sockets implements `PortInspector`, one that can hold a fan implements
-`FanControl`, one that can keep apps shut implements `AppLockGuard`, and the UI
-asks the interface before it draws a button. `Capabilities` is the answer it
-draws from.
+sockets implements `PortInspector`, one that can find and move cache directories
+implements `CacheSweeper`, one that can hold a fan implements `FanControl`, one
+that can keep apps shut implements `AppLockGuard`, and the UI asks the interface
+before it draws a button. `Capabilities` is the answer it draws from.
 
 ## Tests
 
@@ -361,6 +399,27 @@ The lock tests are the same shape, because the lock has the same failure modes:
   touches the file and closes nothing, that *Close all* names how many it asked,
   that a guarded app is offered a reason rather than a checkbox, and that the
   passphrase is never rendered back.
+
+The sweeper's tests are about what must not happen:
+
+- `dev_sweeper/parsers_test` pins the two grammars the scanners actually print —
+  `du` writes `size<TAB>path`, PowerShell writes `path<TAB>bytes`, and they are
+  not the same order — plus the formatter that decides which row looks big.
+- `dev_sweeper/backend_test` builds a throwaway home and answers `du` and `find`
+  from a fake runner: the largest cache comes first, a discovered module is
+  labelled by its path under home, and a failed or partial measurement becomes a
+  note and an unknown size rather than a zero. Its move tests pin the refusals
+  the screen cannot be trusted with — a path the scan did not produce, a
+  symlinked `node_modules`, a file where a cache used to be, a path that resolves
+  outside home, and home itself. Linux is exercised end to end into a scratch
+  freedesktop Trash.
+- `dev_sweeper/trash_linux_test` checks the spec's two directories, the
+  `.trashinfo` that makes restore possible, collision names, and that a failed
+  rename leaves no record claiming a move that did not happen.
+- `dev_sweeper/console_test` drives the real screen: nothing is selected until
+  ticked, *Select shown* respects a search, the dialog names the count and size,
+  a confirmed move sends exactly the ticked targets and rescans, and a failed
+  move leaves the rows with the path beside the reason.
 - `platform/paths_test` builds a throwaway `.app` in a temp directory and asks the
   resolution questions of it: the bundle's `Resources` is found and a non-bundle
   path is not, a missing helper is `null` rather than a path that cannot run, and

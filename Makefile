@@ -6,14 +6,39 @@ LOCKD ?= build/lockd/toolshed-lockd
 APP ?= toolshed
 STAGED ?= build/macos/Build/Products/Release/$(APP).app
 
-.PHONY: help setup upgrade run build build-macos install-macos build-android build-linux fanctl lockd test analyze format format-check clean check doctor logo
+# Only dispatch to a platform this machine can actually build for. Same rule as
+# openwrt-flasher: a broken compile is a failure, not "not available".
+IS_MAC := $(filter Darwin,$(shell uname -s))
+IS_LINUX := $(filter Linux,$(shell uname -s))
+IS_WINDOWS := $(filter Windows_NT MINGW64_NT% MSYS_NT% CYGWIN_NT%,$(OS) $(shell uname -s))
+RUN_TARGET := $(strip $(if $(IS_MAC),run-macos,$(if $(IS_LINUX),run-linux,$(if $(IS_WINDOWS),run-windows,))))
+
+# Linux desktop integration. Defaults to a per-user install; use
+# `sudo make install-linux PREFIX=/usr/local` for a system-wide one.
+PREFIX ?= $(HOME)/.local
+APP_ID := com.bling.toolshed
+LINUX_APP_DIR := $(PREFIX)/lib/$(APP)
+LINUX_DESKTOP_FILE := $(PREFIX)/share/applications/$(APP_ID).desktop
+LINUX_ICON_FILE := $(PREFIX)/share/icons/hicolor/256x256/apps/$(APP_ID).png
+# Desktop environments pick up changes without these; they just make it faster.
+LINUX_REFRESH_CACHES := \
+	if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q "$(PREFIX)/share/applications" || true; fi; \
+	if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -f -t "$(PREFIX)/share/icons/hicolor" || true; fi
+
+.PHONY: help setup upgrade run run-macos run-windows run-linux run-all build build-macos install-macos install-linux uninstall-linux build-android build-linux fanctl lockd test analyze format format-check clean check doctor logo
 
 help:
 	@echo "setup         flutter pub get"
 	@echo "upgrade       flutter pub upgrade --major-versions"
 	@echo "run           flutter run (add DEVICE=<id> to target a device)"
+	@echo "run-macos     flutter run -d macos"
+	@echo "run-windows   flutter run -d windows"
+	@echo "run-linux     flutter run -d linux"
+	@echo "run-all       flutter run on this machine's desktop platform"
 	@echo "build         flutter build macos --release"
 	@echo "install-macos build, then replace and relaunch /Applications/$(APP).app"
+	@echo "install-linux install the Linux release build with menu entry and icon (PREFIX=$(PREFIX))"
+	@echo "uninstall-linux remove what install-linux added"
 	@echo "build-android flutter build apk --release"
 	@echo "build-linux   flutter build linux --release"
 	@echo "fanctl        compile the macOS fan helper and run its selfcheck"
@@ -35,6 +60,22 @@ upgrade:
 
 run:
 	$(FLUTTER) run $(if $(DEVICE),-d $(DEVICE),)
+
+run-macos:
+	$(FLUTTER) run -d macos
+
+run-windows:
+	$(FLUTTER) run -d windows
+
+run-linux:
+	$(FLUTTER) run -d linux
+
+run-all:
+ifeq ($(RUN_TARGET),)
+	@echo "No Flutter desktop target for $(shell uname -s)." && exit 1
+else
+	@$(MAKE) $(RUN_TARGET)
+endif
 
 build: build-macos
 
@@ -60,6 +101,30 @@ install-macos: build-macos
 	cp -R $(STAGED) /Applications/$(APP).app
 	@open -g /Applications/$(APP).app
 	@echo "installed /Applications/$(APP).app, with its helpers inside it"
+
+# The .desktop file's Exec is rewritten to the absolute install path so the
+# menu entry works without the app being on PATH.
+install-linux:
+	@bundle=$$(ls -d build/linux/*/release/bundle 2>/dev/null | head -n 1); \
+	if [ -z "$$bundle" ]; then echo "No Linux release build found. Run 'make build-linux' first."; exit 1; fi; \
+	echo "Installing $$bundle to $(LINUX_APP_DIR)..."; \
+	rm -rf "$(LINUX_APP_DIR)" && \
+	mkdir -p "$(LINUX_APP_DIR)" && \
+	cp -R "$$bundle/." "$(LINUX_APP_DIR)/" && \
+	mkdir -p "$(dir $(LINUX_ICON_FILE))" && \
+	install -m 644 linux/runner/resources/app_icon.png "$(LINUX_ICON_FILE)" && \
+	mkdir -p "$(dir $(LINUX_DESKTOP_FILE))" && \
+	sed "s|^Exec=.*|Exec=$(LINUX_APP_DIR)/$(APP)|" \
+		linux/packaging/$(APP_ID).desktop > "$(LINUX_DESKTOP_FILE)" && \
+	chmod 644 "$(LINUX_DESKTOP_FILE)"
+	@$(LINUX_REFRESH_CACHES)
+	@echo "Installed. toolshed is now in your application menu."
+
+uninstall-linux:
+	rm -rf "$(LINUX_APP_DIR)"
+	rm -f "$(LINUX_DESKTOP_FILE)" "$(LINUX_ICON_FILE)"
+	@$(LINUX_REFRESH_CACHES)
+	@echo "Uninstalled."
 
 build-android:
 	$(FLUTTER) build apk --release
@@ -129,6 +194,8 @@ logo:
 		f=$${e##*:}; f=$$((f * 108 / 48)); \
 		sips -z $$f $$f build/logo/logo_mark.svg.png \
 			--out android/app/src/main/res/mipmap-$${e%%:*}/ic_launcher_foreground.png >/dev/null; done
+	@sips -z 256 256 build/logo/logo.svg.png \
+		--out linux/runner/resources/app_icon.png >/dev/null
 	@python3 -c "from PIL import Image; Image.open('build/logo/logo.svg.png').convert('RGBA').save('windows/runner/resources/app_icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(256,256)])"
 	@rm -rf build/logo
 	@echo "logo: assets/logo.png and the macOS/Android/Windows icons re-rendered from assets/logo.svg"
