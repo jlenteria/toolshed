@@ -4,6 +4,7 @@ import '../../models/agent_status.dart';
 import '../../models/tool_descriptor.dart';
 import '../../tools/app_lock/lock_screen.dart';
 import '../../tools/dev_sweeper/sweep_screen.dart';
+import '../../tools/docker/docker_screen.dart';
 import '../../tools/fan_ctl/fan_screen.dart';
 import '../../tools/mem_reaper/config_sheet.dart';
 import '../../tools/mem_reaper/ranking_screen.dart';
@@ -445,6 +446,18 @@ class _Controls extends StatelessWidget {
       () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => SweepScreen(registry: registry, entry: entry),
+        ),
+      ),
+    );
+
+    addSecondary(
+      ToolAction.showDocker,
+      Icons.dns_outlined,
+      'Containers & images',
+      'What the docker CLI sees, and a safe way to stop or remove it',
+      () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => DockerScreen(registry: registry, entry: entry),
         ),
       ),
     );

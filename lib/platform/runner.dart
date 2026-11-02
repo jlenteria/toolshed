@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/tool_exception.dart';
+import 'paths.dart';
 
 class ProcResult {
   const ProcResult(this.executable, this.exitCode, this.stdout, this.stderr);
@@ -29,6 +30,14 @@ class ProcResult {
 class ProcessRunner {
   const ProcessRunner();
 
+  /// The environment handed to every child: the parent's, with a `PATH` that
+  /// also covers the well-known bin directories a Dock launch strips. See
+  /// [Paths.subprocessPath] — a tool found by absolute path still execs its own
+  /// siblings by name, and those must be reachable.
+  static Map<String, String> get _childEnvironment => {
+    'PATH': Paths.subprocessPath,
+  };
+
   Future<ProcResult> run(
     String executable,
     List<String> arguments, {
@@ -41,6 +50,7 @@ class ProcessRunner {
         executable,
         arguments,
         workingDirectory: workingDirectory,
+        environment: _childEnvironment,
         runInShell: false,
       ).timeout(timeout);
     } on TimeoutException {
@@ -79,7 +89,12 @@ class ProcessRunner {
   }) async {
     Process child;
     try {
-      child = await Process.start(executable, arguments, runInShell: false);
+      child = await Process.start(
+        executable,
+        arguments,
+        environment: _childEnvironment,
+        runInShell: false,
+      );
     } on ProcessException catch (e) {
       throw ToolException(
         'EXEC_FAILED',

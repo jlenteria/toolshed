@@ -133,4 +133,34 @@ void main() {
       );
     });
   });
+
+  group('the child PATH', () {
+    final separator = Platform.isWindows ? ';' : ':';
+    List<String> dirs(String path) =>
+        path.split(separator).where((d) => d.isNotEmpty).toList();
+
+    test('keeps every inherited entry and puts it ahead of the fallbacks', () {
+      // subprocessPath de-dupes, so compare against the inherited dirs in
+      // first-seen order, not the raw PATH (which repeats entries).
+      final inherited = dirs(Platform.environment['PATH'] ?? '').toSet().toList();
+      final handed = dirs(Paths.subprocessPath);
+      // Nothing the user already had is dropped or reordered.
+      expect(handed.length, greaterThanOrEqualTo(inherited.length));
+      expect(handed.sublist(0, inherited.length), inherited);
+    });
+
+    test('adds the well-known bin dirs a Dock launch strips', () {
+      final handed = dirs(Paths.subprocessPath);
+      if (Platform.isMacOS) {
+        expect(handed, contains('/opt/homebrew/bin'));
+      } else if (Platform.isLinux) {
+        expect(handed, contains('/usr/local/bin'));
+      }
+    });
+
+    test('never repeats a directory', () {
+      final handed = dirs(Paths.subprocessPath);
+      expect(handed.toSet().length, handed.length);
+    });
+  });
 }

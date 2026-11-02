@@ -4,6 +4,8 @@ import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/lock_agent.dart';
 import 'dev_sweeper/sweep_target.dart';
+import 'docker/docker_engine.dart';
+import 'docker/docker_models.dart';
 import 'fan_ctl/fan_daemon.dart';
 import 'fan_ctl/fan_policy.dart';
 import 'fan_ctl/fan_telemetry.dart';
@@ -88,6 +90,49 @@ abstract class ProcessReaper implements ProcessStopper {
 /// Backends that can list the ports the OS reports as listening.
 abstract class PortInspector {
   Future<List<PortListener>> listening();
+}
+
+/// Backends that drive a Docker engine through its own CLI.
+///
+/// Everything here shells out to `docker` and reports what it printed. The app
+/// holds no container rules: which container may be stopped, whether a
+/// writable layer survives a `rm`, and what `prune` is allowed to delete are all
+/// the CLI's and the daemon's decisions, never a second copy in Dart. The
+/// backend is bound to no single engine — it finds `docker` on PATH and lets the
+/// CLI resolve the machine's own context, so switching from OrbStack to Docker
+/// Desktop or a plain `dockerd` needs no change here.
+abstract class DockerManager {
+  /// Containers, images and disk usage as the current endpoint reports them.
+  Future<DockerInventory> inventory();
+
+  /// Runs one lifecycle command on [container] and returns the CLI's own line.
+  Future<DockerActionResult> containerAction(
+    DockerContainer container,
+    DockerOp op,
+  );
+
+  /// Removes dangling images and returns what the CLI says was reclaimed.
+  Future<DockerActionResult> pruneImages();
+
+  /// Opens a container's published port in the system browser through the OS's
+  /// own URL handler. Throws when [port] is not published (nothing on the host
+  /// reaches it) — the console only offers this for a published mapping.
+  Future<DockerActionResult> openPort(DockerPortMapping port);
+
+  /// The program that can start or stop the engine behind the CLI, when one is
+  /// installed. This is a synchronous "what is on disk" answer, deliberately
+  /// independent of whether the daemon is currently answering: an engine that is
+  /// switched off still has a manager that can bring it back, and that is the
+  /// state where a Start button matters most. Null means nothing here can be
+  /// started from the console — a plain `dockerd`, or no engine at all.
+  DockerEngineManager? get engineManager;
+
+  /// Runs the engine manager's start command and returns its own line.
+  Future<DockerActionResult> startEngine();
+
+  /// Runs the engine manager's stop command. Takes every running container down
+  /// with the engine, so the console always confirms that first.
+  Future<DockerActionResult> stopEngine();
 }
 
 /// Backends that can find disposable build caches and move them to the Trash.

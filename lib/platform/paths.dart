@@ -34,6 +34,140 @@ class Paths {
     return file.existsSync() ? file.path : null;
   }
 
+  /// The `docker` CLI, wherever the machine's engine put it — or `null` when
+  /// there is none.
+  ///
+  /// Deliberately engine-agnostic: it looks for the standard `docker` binary and
+  /// nothing that belongs to a specific runtime. Uninstall OrbStack and install
+  /// Docker Desktop (or run a plain `dockerd`, Colima or podman) and this still
+  /// resolves, because the thing being found is the CLI the switch installs, not
+  /// a path welded to the old engine. A dangling symlink left behind by an
+  /// uninstalled engine fails `existsSync` (which follows the link) and is
+  /// skipped, so a half-removed OrbStack never wins over a working Docker
+  /// Desktop.
+  ///
+  /// The environment's `PATH` is scanned first — that is where a user's chosen
+  /// engine already points — then the well-known install locations. The second
+  /// pass exists because an app launched from the Dock does not inherit a login
+  /// shell's `PATH`: Homebrew and `/usr/local/bin` would otherwise be invisible
+  /// to it even though the CLI is installed.
+  static String? dockerBinary() {
+    final names = Platform.isWindows
+        ? const ['docker.exe', 'docker']
+        : const ['docker'];
+    for (final dir in _pathDirectories) {
+      for (final name in names) {
+        final file = File('$dir${Platform.pathSeparator}$name');
+        if (file.existsSync()) return file.path;
+      }
+    }
+    for (final candidate in dockerCandidates()) {
+      if (File(candidate).existsSync()) return candidate;
+    }
+    return null;
+  }
+
+  static List<String> get _pathDirectories {
+    final path = Platform.environment['PATH'] ?? '';
+    if (path.isEmpty) return const [];
+    return path
+        .split(Platform.isWindows ? ';' : ':')
+        .where((d) => d.isNotEmpty)
+        .toList();
+  }
+
+  /// The named executable resolved to an absolute path, or `null`.
+  ///
+  /// A synchronous filesystem probe that follows symlinks, so a dangling link
+  /// left by a half-uninstalled tool reads as absent rather than as a binary
+  /// that will fail the moment it is run. Used to find an engine's own manager
+  /// (`colima`, `orbctl`) the same way [dockerBinary] finds the CLI — which
+  /// means the same two passes: the environment's `PATH` first, then the
+  /// well-known install directories. The second pass matters because an app
+  /// launched from the Dock does not inherit a login shell's `PATH`, so
+  /// Homebrew's `/opt/homebrew/bin` is invisible to it even though the manager
+  /// is installed there; without the fallback the engine card disappears only
+  /// in the packaged app and works only under `flutter run`.
+  static String? which(String name) {
+    final names = Platform.isWindows && !name.endsWith('.exe')
+        ? <String>[name, '$name.exe']
+        : <String>[name];
+    for (final dir in _pathDirectories) {
+      for (final candidate in names) {
+        final file = File('$dir${Platform.pathSeparator}$candidate');
+        if (file.existsSync()) return file.path;
+      }
+    }
+    for (final dir in _wellKnownBinDirectories) {
+      for (final candidate in names) {
+        final file = File('$dir${Platform.pathSeparator}$candidate');
+        if (file.existsSync()) return file.path;
+      }
+    }
+    return null;
+  }
+
+  /// Bin directories that a GUI launch strips from `PATH` but that still hold
+  /// the usual installs. Scanned by [which] only after `PATH` comes up empty, so
+  /// a user's own choice of binary always wins over these defaults.
+  static List<String> get _wellKnownBinDirectories {
+    if (Platform.isWindows) return const [];
+    if (Platform.isMacOS) {
+      return const [
+        '/opt/homebrew/bin',
+        '/usr/local/bin',
+        '/usr/bin',
+      ];
+    }
+    return const ['/usr/local/bin', '/usr/bin', '/snap/bin'];
+  }
+
+  /// The `PATH` to hand a child process: the inherited one first, then the
+  /// well-known bin directories, de-duplicated.
+  ///
+  /// A binary discovered through an absolute path still shells out to its own
+  /// siblings by name — `colima` runs `lima`, both in `/opt/homebrew/bin`. When
+  /// the app was launched from the Dock that directory is not on its `PATH`, so
+  /// the child would fail to find its helper even though the parent reached the
+  /// tool fine. Appending (never prepending) the known dirs means a user's own
+  /// `PATH` entries always win; this only fills what the launch stripped.
+  static String get subprocessPath {
+    final separator = Platform.isWindows ? ';' : ':';
+    final inherited =
+        (Platform.environment['PATH'] ?? '').split(separator)
+            .where((d) => d.isNotEmpty);
+    final seen = <String>{};
+    final dirs = <String>[];
+    for (final dir in <String>[...inherited, ..._wellKnownBinDirectories]) {
+      if (seen.add(dir)) dirs.add(dir);
+    }
+    return dirs.join(separator);
+  }
+
+  /// Known engine locations, in the order a switch is most likely to have
+  /// installed one of them. Only used after a `PATH` scan comes up empty.
+  static List<String> dockerCandidates() {
+    if (Platform.isWindows) {
+      return const [
+        r'C:\Program Files\Docker\Docker\resources\bin\docker.exe',
+        r'C:\Program Files\Docker\Docker\resources\cli\docker.exe',
+      ];
+    }
+    if (Platform.isMacOS) {
+      return [
+        '/usr/local/bin/docker',
+        '/opt/homebrew/bin/docker',
+        '/usr/bin/docker',
+        '$home/.orbstack/bin/docker',
+      ];
+    }
+    return const [
+      '/usr/bin/docker',
+      '/usr/local/bin/docker',
+      '/snap/bin/docker',
+    ];
+  }
+
   static String get home {
     if (_home != null) return _home!;
     final env = Platform.environment;

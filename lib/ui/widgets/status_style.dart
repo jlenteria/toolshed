@@ -9,6 +9,7 @@ IconData toolIcon(String id) => switch (id) {
   'dev_sweeper' => Icons.delete_sweep_outlined,
   'fan_ctl' => Icons.air_rounded,
   'app_lock' => Icons.lock_outline_rounded,
+  'docker' => Icons.dns_outlined,
   _ => Icons.handyman_outlined,
 };
 

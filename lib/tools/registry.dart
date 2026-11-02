@@ -10,6 +10,9 @@ import 'app_lock/app_lock_backend.dart';
 import 'app_lock/lock_agent.dart';
 import 'dev_sweeper/dev_sweeper_backend.dart';
 import 'dev_sweeper/sweep_target.dart';
+import 'docker/docker_backend.dart';
+import 'docker/docker_engine.dart';
+import 'docker/docker_models.dart';
 import 'fan_ctl/fan_backend.dart';
 import 'fan_ctl/fan_daemon.dart';
 import 'fan_ctl/fan_policy.dart';
@@ -72,6 +75,7 @@ class ToolRegistry extends ChangeNotifier {
     ToolEntry(backend: _memReaperBackend()),
     ToolEntry(backend: _portWardenBackend()),
     ToolEntry(backend: _devSweeperBackend()),
+    ToolEntry(backend: _dockerBackend()),
     ToolEntry(backend: _fanBackend()),
     ToolEntry(backend: _appLockBackend()),
   ]);
@@ -157,6 +161,33 @@ class ToolRegistry extends ChangeNotifier {
           'phone exposes only this app\'s own storage. The developer caches '
           'this tool is for are out of reach, so it is listed rather than '
           'offering a button that cannot work.',
+    );
+  }
+
+  /// Docker is driven through the `docker` CLI, so every desktop gets a real
+  /// backend — and on every desktop the backend itself reports `helperMissing`
+  /// when no CLI is found, so the tool is listed with a reason rather than dead
+  /// buttons. Android is excluded: an unrooted app has no docker CLI, no daemon
+  /// and no engine context to reach, so there is nothing for the console to
+  /// drive.
+  static ToolBackend _dockerBackend() {
+    if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
+      return DockerBackend();
+    }
+    return UnsupportedToolBackend(
+      descriptor: const ToolDescriptor(
+        id: kDockerId,
+        name: 'Docker',
+        summary:
+            'Lists containers and images and lets you start, stop, restart or '
+            'remove a container and prune dangling images, through the docker '
+            'CLI.',
+        implPath: 'docker',
+      ),
+      reason:
+          'Docker runs on the machine that owns the engine. An Android app has '
+          'no docker CLI, no daemon and no context to talk to, so this tool '
+          'is for the desktop.',
     );
   }
 
@@ -347,6 +378,99 @@ class ToolRegistry extends ChangeNotifier {
     }
     if (entry.backend case final PortInspector inspector) return inspector;
     throw ToolException('NO_PORTS', entry.capabilities.reason);
+  }
+
+  /// The containers, images and disk usage as the engine reported them. A read,
+  /// so like [listening] it skips the busy guard.
+  Future<DockerInventory> dockerInventory(String id) =>
+      _dockerAt(id).inventory();
+
+  /// Sends one lifecycle command. Null when it could not be sent at all
+  /// ([ToolEntry.error] says why); otherwise the docker CLI's own verdict. The
+  /// capability checked is the one matching [op], so the console can only ask
+  /// for what the current platform advertised.
+  Future<DockerActionResult?> dockerAction(
+    String id,
+    DockerContainer container,
+    DockerOp op,
+  ) => _ask<DockerActionResult>(id, _dockerActionFor(op), (b) async {
+    if (b case final DockerManager docker) {
+      return docker.containerAction(container, op);
+    }
+    throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
+  });
+
+  Future<DockerActionResult?> dockerPrune(String id) =>
+      _ask<DockerActionResult>(id, ToolAction.dockerPrune, (b) async {
+        if (b case final DockerManager docker) {
+          return docker.pruneImages();
+        }
+        throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
+      });
+
+  /// Opens a published port in the browser. Goes through the busy guard like any
+  /// action, and is checked against the same capability the console drew the
+  /// clickable link under, so a link can never be tapped when the platform has
+  /// no browser handler advertised.
+  Future<DockerActionResult?> dockerOpenPort(
+    String id,
+    DockerPortMapping port,
+  ) => _ask<DockerActionResult>(id, ToolAction.dockerOpenPort, (b) async {
+    if (b case final DockerManager docker) {
+      return docker.openPort(port);
+    }
+    throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
+  });
+
+  /// The engine manager that can be started/stopped here, for labelling the
+  /// button. A read with no side effect, and it does not go through the busy
+  /// guard: knowing what owns the engine is not an action on it. Null when
+  /// nothing is installed that the console can start.
+  DockerEngineManager? dockerEngine(String id) {
+    if (byId(id)?.backend case final DockerManager docker) {
+      return docker.engineManager;
+    }
+    return null;
+  }
+
+  /// Brings the engine up through its own manager. Available whenever a manager
+  /// was found — including with no CLI and no daemon yet, which is the whole
+  /// point of starting one from here.
+  Future<DockerActionResult?> dockerStartEngine(String id) =>
+      _ask<DockerActionResult>(id, ToolAction.dockerStartEngine, (b) async {
+        if (b case final DockerManager docker) {
+          return docker.startEngine();
+        }
+        throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
+      });
+
+  /// Takes the engine down. Confirmed in the console first, because it stops
+  /// every running container with it.
+  Future<DockerActionResult?> dockerStopEngine(String id) =>
+      _ask<DockerActionResult>(id, ToolAction.dockerStopEngine, (b) async {
+        if (b case final DockerManager docker) {
+          return docker.stopEngine();
+        }
+        throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
+      });
+
+  static ToolAction _dockerActionFor(DockerOp op) => switch (op) {
+    DockerOp.start => ToolAction.dockerStart,
+    DockerOp.stop => ToolAction.dockerStop,
+    DockerOp.restart => ToolAction.dockerRestart,
+    DockerOp.remove => ToolAction.dockerRemove,
+  };
+
+  DockerManager _dockerAt(String id) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(ToolAction.showDocker)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    if (entry.backend case final DockerManager docker) return docker;
+    throw ToolException('NO_DOCKER', entry.capabilities.reason);
   }
 
   /// The caches and node_modules as they were measured at scan time. A read, so

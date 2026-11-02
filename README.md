@@ -77,6 +77,62 @@ symbolic link. A stale or hand-edited target gets a reason instead of a move.
 Project sources, Xcode archives, simulator devices and SDKs are not on the
 allowlist and are never measured or offered.
 
+### docker — the containers and images you already have
+
+**Containers & images** lists what the `docker` CLI reports on demand — every
+container running or stopped, every image, and `docker system df` — and offers
+the lifecycle actions the engine will honour: start, stop, restart and remove a
+container, and prune **dangling images only**. Every action confirms first;
+remove says plainly that the container's writable layer goes with it, and prune
+promises nothing about tagged images because `docker image prune` removes none.
+This is a remote control, not an agent: the console sends `docker` commands and
+shows the CLI's own verdict in the toast, and the engine — never a second copy of
+the rules in Dart — decides whether each one succeeds.
+
+**Engine-agnostic on purpose.** It finds the standard `docker` binary on `PATH`
+and — because an app launched from the Dock does not inherit a login shell's
+`PATH`, and would otherwise miss Homebrew and `/usr/local/bin` — in the usual
+install locations too, then lets that CLI resolve the machine's own current
+`docker context`. So it is not welded to any one runtime: uninstall OrbStack and
+install Docker Desktop, or run a plain `dockerd`, Colima or podman, and the next
+scan finds whichever CLI is now there and talks to whatever endpoint is now
+active. A dangling symlink an uninstalled engine left behind fails the existence
+check and is skipped rather than winning over a working binary, and the child
+inherits this process's environment, so a `DOCKER_HOST` or a switched context is
+honoured without the app knowing the difference.
+
+**What it says when there is no Docker.** With no `docker` CLI *and* no engine
+manager found the tool is still listed, but as *helper not found* with the reason
+and no action buttons — a page of controls that could only fail is worse than one
+line telling you to install an engine. And if the CLI is present but its daemon
+does not answer, the status and any failed read carry docker's own message
+("Cannot connect to the Docker daemon…") instead of pretending you have zero
+containers, because "nothing to show" and "I could not reach the engine you
+pointed me at" are different truths. Android is listed as unsupported: an
+unrooted app has no docker CLI, no daemon and no context to reach, so there is
+nothing for the console to drive.
+
+**Starting the engine itself.** A switched-off daemon is the one state where a
+read can do nothing but say so, so when a manager for the engine is installed —
+Colima, OrbStack's `orbctl`, or Docker Desktop — the console shows an **Engine**
+card that runs that manager's own command. Start brings the engine up
+(`colima start`, or opening Docker Desktop) so you are not forced into a terminal
+after stopping or uninstalling one runtime and switching to another; Stop takes it
+down, behind a confirm dialog that says plainly that the whole engine and every
+running container go with it. The button is named for whichever manager was
+actually found, so it never advertises a start path this machine does not have,
+and a plain `dockerd` with no manager correctly offers nothing.
+
+**Opening a container's port.** Each container row lists its ports in full and
+separates what can be browsed from what cannot. A published mapping
+(`0.0.0.0:24400->80/tcp`) is drawn as a clickable link that opens
+`http://localhost:24400` in the default browser through the OS's own handler
+(`open` / `xdg-open` / `cmd start`) — no URL is ever handed to a shell, and the
+address is built only from a digits-only host port. A dual-stack bind prints two
+lines for one port, so the link is collapsed to one. A port that is exposed but
+never published (`8080/tcp`) is shown greyed and inert, because nothing on the
+host can reach it.
+
 ### fan_ctl — temperature-triggered fan control (macOS)
 
 Set a temperature; below it the fan stays in Apple's own control, at or above it
@@ -298,6 +354,12 @@ lib/
       trash_linux.dart        the freedesktop Trash, written directly
       dev_sweeper_backend.dart  the scan, the platform Trash, the refusal rules
       sweep_screen.dart       its console
+    docker/                 ditto, for the containers:
+      docker_models.dart      a container, an image, a disk line, the action
+      docker_engine.dart      which manager (Colima/OrbStack/Desktop) can start it
+      docker_parsers.dart     the `--format json` grammars of ps, images, df
+      docker_backend.dart     finds the docker CLI, sends it commands, reports back
+      docker_screen.dart      the console
     fan_ctl/                ditto, for the fan:
       fan_policy.dart         the threshold, the ramp, the lease
       fan_telemetry.dart      fans, sensors and the group maxima
@@ -330,6 +392,8 @@ test/
                             force stop (script and console)
   port_warden/              parsers, three scanners, live lsof, console
   dev_sweeper/              parsers, locations, Trash, scanners, console
+  docker/                   parsers, backend, engine-manager discovery, and the
+                            console over a fake docker CLI and a fake Colima
   platform/                 where an installed app looks for its helpers
   fixtures/                 canned `launchctl` output
 ```
@@ -344,8 +408,9 @@ adding a folder and one line in `registry.dart`.
 (`ProcessReaper` adds the whole memory scan), one that can list listening
 sockets implements `PortInspector`, one that can find and move cache directories
 implements `CacheSweeper`, one that can hold a fan implements `FanControl`, one
-that can keep apps shut implements `AppLockGuard`, and the UI asks the interface
-before it draws a button. `Capabilities` is the answer it draws from.
+that can keep apps shut implements `AppLockGuard`, one that drives a Docker
+engine implements `DockerManager`, and the UI asks the interface before it draws
+a button. `Capabilities` is the answer it draws from.
 
 ## Tests
 

@@ -63,6 +63,38 @@ enum ToolAction {
 
   /// Ask one app to quit now, without waiting for the watcher to notice.
   closeApp,
+
+  /// Open the Docker console: containers, images and disk usage read from the
+  /// `docker` CLI on demand.
+  showDocker,
+
+  /// Per-container lifecycle, each confirmed in the console before it is sent.
+  dockerStart,
+  dockerStop,
+  dockerRestart,
+
+  /// `docker rm -f`: the only container action that discards the writable
+  /// layer, so it always confirms with that said out loud.
+  dockerRemove,
+
+  /// `docker image prune`: dangling images only, never a tagged one.
+  dockerPrune,
+
+  /// Open a container's published port in the system browser. A read-shaped
+  /// side effect — it sends nothing to the engine — advertised whenever a CLI
+  /// was found to read the ports through, since only a published port offers it.
+  dockerOpenPort,
+
+  /// Start the engine itself through whichever manager owns it — `colima
+  /// start`, `orbctl start` or opening Docker Desktop — so a stopped daemon
+  /// can be brought back from the console instead of a terminal. Advertised
+  /// only when such a manager is actually installed.
+  dockerStartEngine,
+
+  /// Stop the engine manager. Off by the same rule as starting it: only when a
+  /// manager was found, and the console says plainly that it takes every
+  /// running container down with it.
+  dockerStopEngine,
 }
 
 class Capabilities {
