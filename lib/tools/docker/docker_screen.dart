@@ -590,11 +590,13 @@ class _PortChip extends StatelessWidget {
       tooltip = 'Open ${mapping.url} in the browser';
     } else if (mapping.isPublished) {
       icon = Icons.public;
-      tooltip = '${mapping.hostIp}:${mapping.hostPort} → '
+      tooltip =
+          '${mapping.hostIp}:${mapping.hostPort} → '
           '${mapping.containerPort}/${mapping.proto} — no browser handler here';
     } else {
       icon = Icons.lock_outline;
-      tooltip = '${mapping.containerPort}/${mapping.proto} is only exposed '
+      tooltip =
+          '${mapping.containerPort}/${mapping.proto} is only exposed '
           'inside the container and not published on the host';
     }
 

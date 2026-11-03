@@ -329,7 +329,8 @@ class DockerBackend implements ToolBackend, DockerManager {
         _firstLine(result.blurb).isEmpty
             ? 'Could not open $url in the browser.'
             : _firstLine(result.blurb),
-        detail: 'command: $opener ${args.join(' ')}\nexit code: ${result.exitCode}',
+        detail:
+            'command: $opener ${args.join(' ')}\nexit code: ${result.exitCode}',
       );
     }
     return DockerActionResult(message: 'Opened $url.');

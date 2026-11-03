@@ -71,7 +71,10 @@ String _hostIp(String raw) {
     ip = ip.substring(1, ip.length - 1);
   }
   // Bind-any in all the spellings docker prints: 0.0.0.0, ::, ::: and empty.
-  if (ip.isEmpty || ip == '*' || ip == '0.0.0.0' || ip.replaceAll(':', '') == '') {
+  if (ip.isEmpty ||
+      ip == '*' ||
+      ip == '0.0.0.0' ||
+      ip.replaceAll(':', '') == '') {
     return '*';
   }
   return ip;
@@ -95,7 +98,9 @@ List<DockerPortMapping> parsePorts(String raw) {
       mapping = DockerPortMapping(containerPort: port, proto: proto);
     } else {
       final host = entry.substring(0, arrow).trim();
-      final (containerPort, proto) = _splitProto(entry.substring(arrow + 2).trim());
+      final (containerPort, proto) = _splitProto(
+        entry.substring(arrow + 2).trim(),
+      );
       final colon = host.lastIndexOf(':');
       final hostIp = colon < 0 ? host : host.substring(0, colon);
       final hostPort = colon < 0 ? '' : host.substring(colon + 1);
