@@ -327,11 +327,7 @@ void main() {
           const DockerPortMapping(containerPort: '8080', proto: 'tcp'),
         ),
         throwsA(
-          isA<ToolException>().having(
-            (e) => e.code,
-            'code',
-            'NOT_PUBLISHED',
-          ),
+          isA<ToolException>().having((e) => e.code, 'code', 'NOT_PUBLISHED'),
         ),
       );
       expect(runner.calls, isEmpty);

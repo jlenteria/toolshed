@@ -85,18 +85,20 @@ void main() {
   });
 
   group('ports', () {
-    test('splits a published v4 mapping into its host and container halves',
-        () {
-      final ports = parsePorts('0.0.0.0:24400->80/tcp');
-      expect(ports, hasLength(1));
-      final p = ports.single;
-      expect(p.isPublished, isTrue);
-      expect(p.hostIp, '*');
-      expect(p.hostPort, '24400');
-      expect(p.containerPort, '80');
-      expect(p.proto, 'tcp');
-      expect(p.url, 'http://localhost:24400');
-    });
+    test(
+      'splits a published v4 mapping into its host and container halves',
+      () {
+        final ports = parsePorts('0.0.0.0:24400->80/tcp');
+        expect(ports, hasLength(1));
+        final p = ports.single;
+        expect(p.isPublished, isTrue);
+        expect(p.hostIp, '*');
+        expect(p.hostPort, '24400');
+        expect(p.containerPort, '80');
+        expect(p.proto, 'tcp');
+        expect(p.url, 'http://localhost:24400');
+      },
+    );
 
     test('a dual-stack bind collapses to one browsable port', () {
       // Docker prints `0.0.0.0` and `[::]` lines for the same host port.
@@ -129,19 +131,22 @@ void main() {
       expect(parsePorts('   '), isEmpty);
     });
 
-    test('a container carries its parsed mappings alongside the raw string', () {
-      final row = <String, Object?>{
-        'ID': 'aaaabbbbccccdddd',
-        'Names': 'web',
-        'State': 'running',
-        'Status': 'Up',
-        'Ports': '0.0.0.0:8080->80/tcp, [::]:8080->80/tcp',
-      };
-      final container = parseContainers(jsonLines([row])).containers.single;
-      expect(container.ports, '0.0.0.0:8080->80/tcp, [::]:8080->80/tcp');
-      expect(container.portMappings, hasLength(1));
-      expect(container.portMappings.single.url, 'http://localhost:8080');
-    });
+    test(
+      'a container carries its parsed mappings alongside the raw string',
+      () {
+        final row = <String, Object?>{
+          'ID': 'aaaabbbbccccdddd',
+          'Names': 'web',
+          'State': 'running',
+          'Status': 'Up',
+          'Ports': '0.0.0.0:8080->80/tcp, [::]:8080->80/tcp',
+        };
+        final container = parseContainers(jsonLines([row])).containers.single;
+        expect(container.ports, '0.0.0.0:8080->80/tcp, [::]:8080->80/tcp');
+        expect(container.portMappings, hasLength(1));
+        expect(container.portMappings.single.url, 'http://localhost:8080');
+      },
+    );
   });
 
   group('images', () {

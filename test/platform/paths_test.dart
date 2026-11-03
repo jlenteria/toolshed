@@ -142,7 +142,9 @@ void main() {
     test('keeps every inherited entry and puts it ahead of the fallbacks', () {
       // subprocessPath de-dupes, so compare against the inherited dirs in
       // first-seen order, not the raw PATH (which repeats entries).
-      final inherited = dirs(Platform.environment['PATH'] ?? '').toSet().toList();
+      final inherited = dirs(
+        Platform.environment['PATH'] ?? '',
+      ).toSet().toList();
       final handed = dirs(Paths.subprocessPath);
       // Nothing the user already had is dropped or reordered.
       expect(handed.length, greaterThanOrEqualTo(inherited.length));

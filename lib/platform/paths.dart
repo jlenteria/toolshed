@@ -113,11 +113,7 @@ class Paths {
   static List<String> get _wellKnownBinDirectories {
     if (Platform.isWindows) return const [];
     if (Platform.isMacOS) {
-      return const [
-        '/opt/homebrew/bin',
-        '/usr/local/bin',
-        '/usr/bin',
-      ];
+      return const ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin'];
     }
     return const ['/usr/local/bin', '/usr/bin', '/snap/bin'];
   }
@@ -133,9 +129,9 @@ class Paths {
   /// `PATH` entries always win; this only fills what the launch stripped.
   static String get subprocessPath {
     final separator = Platform.isWindows ? ';' : ':';
-    final inherited =
-        (Platform.environment['PATH'] ?? '').split(separator)
-            .where((d) => d.isNotEmpty);
+    final inherited = (Platform.environment['PATH'] ?? '')
+        .split(separator)
+        .where((d) => d.isNotEmpty);
     final seen = <String>{};
     final dirs = <String>[];
     for (final dir in <String>[...inherited, ..._wellKnownBinDirectories]) {

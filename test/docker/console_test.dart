@@ -109,7 +109,12 @@ class _HangingRunner extends ProcessRunner {
     String? workingDirectory,
   }) async {
     await gate.future;
-    return const ProcResult('docker', 1, '', 'Cannot connect to the Docker daemon.');
+    return const ProcResult(
+      'docker',
+      1,
+      '',
+      'Cannot connect to the Docker daemon.',
+    );
   }
 }
 
@@ -304,7 +309,9 @@ void main() {
     final entry = registry.byId('docker')!;
 
     await tester.pumpWidget(
-      MaterialApp(home: DockerScreen(registry: registry, entry: entry)),
+      MaterialApp(
+        home: DockerScreen(registry: registry, entry: entry),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -335,7 +342,9 @@ void main() {
     final entry = registry.byId('docker')!;
 
     await tester.pumpWidget(
-      MaterialApp(home: DockerScreen(registry: registry, entry: entry)),
+      MaterialApp(
+        home: DockerScreen(registry: registry, entry: entry),
+      ),
     );
     await tester.pump(); // first frame: the read is still hanging.
 
