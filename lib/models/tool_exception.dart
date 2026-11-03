@@ -1,6 +1,6 @@
 /// A failure the UI is expected to show rather than swallow.
 ///
-/// [message] is launchctl/plutil/Android's own stderr when there is one, so the
+/// [message] is launchctl/plutil/docker's own stderr when there is one, so the
 /// user sees the real reason instead of "something went wrong".
 class ToolException implements Exception {
   const ToolException(this.code, this.message, {this.detail});

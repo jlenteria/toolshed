@@ -50,7 +50,7 @@ StatusTone statusTone(AgentState? state, ColorScheme scheme) {
       background: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
     ),
     AgentState.notApplicable => StatusTone(
-      icon: Icons.phone_android,
+      icon: Icons.computer,
       foreground: scheme.primary,
       background: scheme.primary.withValues(alpha: 0.12),
     ),

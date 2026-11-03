@@ -750,7 +750,7 @@ ${args.map((a) => '\t\t<string>${esc(a)}</string>').join('\n')}
   }
 
   @override
-  Future<List<ManagedApp>> ranked({int windowDays = 7, int limit = 100}) =>
+  Future<List<ManagedApp>> ranked({int limit = 100}) =>
       _liveProcesses(limit: limit);
 
   /// Live footprints from `top`'s MEM column, which is the number Activity

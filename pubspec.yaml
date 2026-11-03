@@ -7,8 +7,8 @@ version: 1.0.0+1
 environment:
   sdk: ^3.12.2
 
-# Deliberately no third-party dependencies: everything is dart:io Process.run
-# (macOS) or a MethodChannel (Android), so there is nothing to drift upstream.
+# Deliberately no third-party dependencies: everything is dart:io — Process.run
+# and the command each OS already ships — so there is nothing to drift upstream.
 dependencies:
   flutter:
     sdk: flutter

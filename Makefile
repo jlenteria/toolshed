@@ -25,7 +25,7 @@ LINUX_REFRESH_CACHES := \
 	if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database -q "$(PREFIX)/share/applications" || true; fi; \
 	if command -v gtk-update-icon-cache >/dev/null 2>&1; then gtk-update-icon-cache -q -f -t "$(PREFIX)/share/icons/hicolor" || true; fi
 
-.PHONY: help setup upgrade run run-macos run-windows run-linux run-all build build-macos install-macos install-linux uninstall-linux build-android build-linux fanctl lockd test analyze format format-check clean check doctor logo
+.PHONY: help setup upgrade run run-macos run-windows run-linux run-all build build-macos install-macos install-linux uninstall-linux build-linux fanctl lockd test analyze format format-check clean check doctor logo
 
 help:
 	@echo "setup         flutter pub get"
@@ -39,7 +39,6 @@ help:
 	@echo "install-macos build, then replace and relaunch /Applications/$(APP).app"
 	@echo "install-linux install the Linux release build with menu entry and icon (PREFIX=$(PREFIX))"
 	@echo "uninstall-linux remove what install-linux added"
-	@echo "build-android flutter build apk --release"
 	@echo "build-linux   flutter build linux --release"
 	@echo "fanctl        compile the macOS fan helper and run its selfcheck"
 	@echo "lockd         compile the macOS app-lock helper and run its selfcheck"
@@ -126,9 +125,6 @@ uninstall-linux:
 	@$(LINUX_REFRESH_CACHES)
 	@echo "Uninstalled."
 
-build-android:
-	$(FLUTTER) build apk --release
-
 build-linux:
 	$(FLUTTER) build linux --release
 
@@ -176,26 +172,15 @@ doctor:
 
 # The mark is authored in assets/logo.svg so it stays editable in text; it is
 # rasterised once at 1024 and resampled into every bundled PNG and app icon.
-# assets/logo_mark.svg is the same mark without its tile, sized for the safe
-# zone of an Android adaptive icon.
 logo:
 	@mkdir -p build/logo
 	@qlmanage -t -s 1024 -o build/logo assets/logo.svg >/dev/null
-	@qlmanage -t -s 1024 -o build/logo assets/logo_mark.svg >/dev/null
 	@sips -z 512 512 build/logo/logo.svg.png --out assets/logo.png >/dev/null
 	@for s in 16 32 64 128 256 512 1024; do \
 		sips -z $$s $$s build/logo/logo.svg.png \
 			--out macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_$$s.png >/dev/null; done
-	@for e in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do \
-		sips -z $${e##*:} $${e##*:} build/logo/logo.svg.png \
-			--out android/app/src/main/res/mipmap-$${e%%:*}/ic_launcher.png >/dev/null; \
-		sips -z $${e##*:} $${e##*:} build/logo/logo.svg.png \
-			--out android/app/src/main/res/mipmap-$${e%%:*}/ic_launcher_round.png >/dev/null; \
-		f=$${e##*:}; f=$$((f * 108 / 48)); \
-		sips -z $$f $$f build/logo/logo_mark.svg.png \
-			--out android/app/src/main/res/mipmap-$${e%%:*}/ic_launcher_foreground.png >/dev/null; done
 	@sips -z 256 256 build/logo/logo.svg.png \
 		--out linux/runner/resources/app_icon.png >/dev/null
 	@python3 -c "from PIL import Image; Image.open('build/logo/logo.svg.png').convert('RGBA').save('windows/runner/resources/app_icon.ico', format='ICO', sizes=[(16,16),(32,32),(48,48),(256,256)])"
 	@rm -rf build/logo
-	@echo "logo: assets/logo.png and the macOS/Android/Windows icons re-rendered from assets/logo.svg"
+	@echo "logo: assets/logo.png and the macOS/Linux/Windows icons re-rendered from assets/logo.svg"

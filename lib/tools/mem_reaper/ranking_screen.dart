@@ -3,11 +3,10 @@ import 'package:flutter/material.dart';
 import '../../models/tool_descriptor.dart';
 import '../../ui/widgets/console_parts.dart';
 import '../registry.dart';
-import '../tool_backend.dart';
 import 'managed_app.dart';
 
-/// One list with two meanings: macOS rows carry a live footprint, phone rows
-/// carry a cumulative share and duration because Android exposes no per-app RAM.
+/// The processes using memory right now, largest first, each with the force
+/// stop mem_reaper offers for it.
 class RankingScreen extends StatefulWidget {
   const RankingScreen({super.key, required this.registry, required this.entry});
 
@@ -19,16 +18,10 @@ class RankingScreen extends StatefulWidget {
 }
 
 class _RankingScreenState extends State<RankingScreen> {
-  static const List<int> _windows = [1, 3, 7, 14, 30];
-
   List<ManagedApp>? _apps;
-  PhoneMemory? _phone;
-  int _windowDays = 7;
   String? _error;
   bool _loading = true;
   final Set<String> _stopping = {};
-
-  bool get _isPhone => widget.entry.capabilities.support == Support.cappedByOs;
 
   bool _canStop(ManagedApp app) =>
       app.killMode == KillMode.viaReaper &&
@@ -46,14 +39,7 @@ class _RankingScreenState extends State<RankingScreen> {
       _error = null;
     });
     try {
-      final source = widget.registry.phoneSource(widget.entry.descriptor.id);
-      if (_isPhone && source != null) {
-        _phone = await source.phoneMemory();
-        final days = _phone!.usableWindow(_windowDays);
-        _apps = await widget.registry.ranked(widget.entry, windowDays: days);
-      } else {
-        _apps = await widget.registry.ranked(widget.entry);
-      }
+      _apps = await widget.registry.ranked(widget.entry);
     } on Object catch (error) {
       if (mounted) setState(() => _error = '$error');
     }
@@ -98,10 +84,9 @@ class _RankingScreenState extends State<RankingScreen> {
   @override
   Widget build(BuildContext context) {
     final apps = _apps;
-    final phone = _phone;
 
     return ConsoleScaffold(
-      title: _isPhone ? 'App usage' : 'Memory right now',
+      title: 'Memory right now',
       loading: _loading,
       actions: [
         IconButton(
@@ -111,33 +96,13 @@ class _RankingScreenState extends State<RankingScreen> {
         ),
       ],
       children: [
-        PageIntro(
-          title: _isPhone
-              ? 'Phone memory — last $_windowDays days'
-              : 'What is using memory now',
-          message: _isPhone
-              ? 'Android does not expose live per-app memory to other apps. '
-                    'This is a cumulative total over the period, not current RAM.'
-              : 'Read from top\'s MEM column, the physical footprint — the same '
-                    'number Activity Monitor shows. RSS would understate it, '
-                    'because macOS compresses idle pages.',
+        const PageIntro(
+          title: 'What is using memory now',
+          message:
+              'Read from top\'s MEM column, the physical footprint — the same '
+              'number Activity Monitor shows. RSS would understate it, because '
+              'macOS compresses idle pages.',
         ),
-        if (_isPhone && phone != null) ...[
-          const SizedBox(height: 12),
-          _PhoneRam(phone: phone),
-        ],
-        if (_isPhone) ...[
-          const SizedBox(height: 12),
-          _WindowPicker(
-            windows: _windows,
-            selected: _windowDays,
-            retentionDays: phone?.retentionDays,
-            onChanged: (days) {
-              setState(() => _windowDays = days);
-              _load();
-            },
-          ),
-        ],
         if (_error != null) ...[
           const SizedBox(height: 12),
           FailureBanner(message: _error!),
@@ -149,13 +114,10 @@ class _RankingScreenState extends State<RankingScreen> {
             child: Center(child: CircularProgressIndicator()),
           )
         else if (apps != null && apps.isEmpty)
-          EmptyState(
+          const EmptyState(
             icon: Icons.memory_rounded,
-            title: _isPhone ? 'No usage history.' : 'Nothing over the floor.',
-            message: _isPhone
-                ? 'Grant Usage Access or widen the window. A missing record is '
-                      'not the same as an unused app.'
-                : 'No process was over the reporting floor.',
+            title: 'Nothing over the floor.',
+            message: 'No process was over the reporting floor.',
           )
         else if (apps != null)
           Card(
@@ -165,10 +127,6 @@ class _RankingScreenState extends State<RankingScreen> {
                   if (i > 0) const Divider(height: 1),
                   _AppRow(
                     app: app,
-                    registry: widget.registry,
-                    toolId: widget.entry.descriptor.id,
-                    isPhone: _isPhone,
-                    nowMillis: DateTime.now().millisecondsSinceEpoch,
                     stopping: _stopping.contains(app.id),
                     onForceStop: _canStop(app) ? () => _forceStop(app) : null,
                   ),
@@ -181,90 +139,10 @@ class _RankingScreenState extends State<RankingScreen> {
   }
 }
 
-class _PhoneRam extends StatelessWidget {
-  const _PhoneRam({required this.phone});
-
-  final PhoneMemory phone;
-
-  @override
-  Widget build(BuildContext context) {
-    if (phone.ramTotalBytes <= 0) return const SizedBox.shrink();
-    final scheme = Theme.of(context).colorScheme;
-    return InlineNote(
-      icon: Icons.smartphone_outlined,
-      text:
-          'Device RAM: ${ManagedApp.formatBytes(phone.ramAvailableBytes)} free '
-          'of ${ManagedApp.formatBytes(phone.ramTotalBytes)}. That is the whole '
-          'phone — Android gives no app a per-app figure.',
-      tone: scheme.tertiary,
-    );
-  }
-}
-
-class _WindowPicker extends StatelessWidget {
-  const _WindowPicker({
-    required this.windows,
-    required this.selected,
-    required this.onChanged,
-    this.retentionDays,
-  });
-
-  final List<int> windows;
-  final int selected;
-  final ValueChanged<int> onChanged;
-  final int? retentionDays;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final days in windows)
-              ChoiceChip(
-                label: Text('$days d'),
-                selected: days == selected,
-                onSelected: (_) => onChanged(days),
-              ),
-          ],
-        ),
-        if (retentionDays != null && retentionDays! < selected)
-          Padding(
-            padding: const EdgeInsets.only(top: 6),
-            child: Text(
-              'Only about $retentionDays day'
-              '${retentionDays == 1 ? '' : 's'} of history exist on this '
-              'device, so the window was narrowed to match.',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
 class _AppRow extends StatelessWidget {
-  const _AppRow({
-    required this.app,
-    required this.registry,
-    required this.toolId,
-    required this.isPhone,
-    required this.nowMillis,
-    this.stopping = false,
-    this.onForceStop,
-  });
+  const _AppRow({required this.app, this.stopping = false, this.onForceStop});
 
   final ManagedApp app;
-  final ToolRegistry registry;
-  final String toolId;
-  final bool isPhone;
-  final int nowMillis;
   final bool stopping;
   final VoidCallback? onForceStop;
 
@@ -272,23 +150,13 @@ class _AppRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final share = app.share;
 
     return ListTile(
       title: Text(app.name, maxLines: 1, overflow: TextOverflow.ellipsis),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            isPhone
-                ? [
-                    app.lastUsedLabel(nowMillis),
-                    if (app.periodMillis != null) '${app.periodLabel} in use',
-                    if (app.launchCount != null) '${app.launchCount} opens',
-                  ].join(' · ')
-                : 'pid ${app.id}',
-            style: theme.textTheme.bodySmall,
-          ),
+          Text('pid ${app.id}', style: theme.textTheme.bodySmall),
           if (app.detail != null)
             Padding(
               padding: const EdgeInsets.only(top: 2),
@@ -301,34 +169,12 @@ class _AppRow extends StatelessWidget {
                 ),
               ),
             ),
-          if (share != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: MeterBar(
-                fraction: share,
-                height: 5,
-                color: scheme.primary,
-              ),
-            ),
         ],
       ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text(app.memoryLabel, style: theme.textTheme.titleSmall),
-              if (share != null)
-                Text(
-                  'of period',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ),
-            ],
-          ),
+          Text(app.memoryLabel, style: theme.textTheme.titleSmall),
           if (onForceStop != null) ...[
             const SizedBox(width: 8),
             SizedBox(
@@ -349,40 +195,7 @@ class _AppRow extends StatelessWidget {
           ],
         ],
       ),
-      onTap: app.killMode == KillMode.opensAppInfo
-          ? () => _openAppInfo(context)
-          : null,
     );
-  }
-
-  Future<void> _openAppInfo(BuildContext context) async {
-    final source = registry.phoneSource(toolId);
-    if (source == null) return;
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
-    try {
-      await source.openAppInfo(app.id);
-    } on Object catch (error) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            'Could not open the system page for ${app.name}:\n$error',
-          ),
-          duration: const Duration(seconds: 8),
-        ),
-      );
-      return;
-    }
-    messenger.showSnackBar(
-      const SnackBar(
-        content: Text(
-          'Android will not let another app stop it, so the system page is '
-          'open. Tap Force stop there.',
-        ),
-        duration: Duration(seconds: 6),
-      ),
-    );
-    navigator.pop();
   }
 }
 

@@ -3,8 +3,7 @@
 <img src="assets/logo.png" alt="toolshed logo" width="96" height="96">
 
 A cross-platform developer console for the machines you are sitting at: macOS,
-Linux, Windows and Android, from one Flutter codebase with no third-party
-dependencies.
+Linux and Windows, from one Flutter codebase with no third-party dependencies.
 
 Every tool states what it can actually do on the device it is running on. A
 disabled button always says why, in the same screen, because a console that
@@ -27,9 +26,6 @@ unresponsive, with a recorded reason and a log you can read afterwards.
   now names a different executable, asks the process to quit, and kills it after
   3 s — or at once, if you ticked that in the dialog. The toast shows the
   script's verdict, not the app's guess.
-- **Android** has no live per-app memory to report: a non-rooted phone exposes
-  only `UsageStats`, which is time in the foreground. The screen says so and
-  ranks by share of the period instead of inventing a byte figure.
 
 ### port_warden — what is holding a port, and how to let it go
 
@@ -108,9 +104,7 @@ line telling you to install an engine. And if the CLI is present but its daemon
 does not answer, the status and any failed read carry docker's own message
 ("Cannot connect to the Docker daemon…") instead of pretending you have zero
 containers, because "nothing to show" and "I could not reach the engine you
-pointed me at" are different truths. Android is listed as unsupported: an
-unrooted app has no docker CLI, no daemon and no context to reach, so there is
-nothing for the console to drive.
+pointed me at" are different truths.
 
 **Starting the engine itself.** A switched-off daemon is the one state where a
 read can do nothing but say so, so when a manager for the engine is installed —
@@ -335,7 +329,6 @@ lib/
       managed_app.dart        a ranked process
       mem_reaper_config.dart  its settings
       macos_backend.dart      the agent, `top`, launchctl, the plist
-      android_backend.dart    usage stats and the app-info handoff
       launchctl_parse.dart    the two grammars of `launchctl print`
       plist_args.dart         the config sheet's plist round trip
       config_sheet.dart       its settings sheet

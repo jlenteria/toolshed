@@ -208,58 +208,8 @@ abstract class AppLockGuard {
 
 /// Backends that can list what is eating memory on this device.
 ///
-/// Implemented by both platforms, but the numbers mean different things: macOS
-/// sets [ManagedApp.liveBytes] (true footprint), Android only sets
-/// [ManagedApp.aggregateBytes] and [ManagedApp.share] (a usage-stats total over
-/// a window). The ranking screen renders whichever fields are present.
+/// A desktop ranking is a live footprint — [ManagedApp.liveBytes] — measured
+/// over at most [limit] rows.
 abstract class MemoryRanking {
-  Future<List<ManagedApp>> ranked({int windowDays = 7, int limit = 100});
-}
-
-/// The Android-only extras: the usage-access gate and the system-page jumps.
-///
-/// Split out from [ToolBackend] so the macOS backend never has to implement
-/// methods that cannot mean anything on a desktop.
-abstract class PhoneMemorySource implements MemoryRanking {
-  Future<PhoneMemory> phoneMemory();
-
-  Future<void> requestUsageAccess();
-
-  /// Jumps to the system App-info page. Android will not let another app call
-  /// Force stop, so this is as far as the phone path goes.
-  Future<void> openAppInfo(String packageName);
-
-  Future<List<int>?> appIcon(String packageName, {int sizePx = 96});
-}
-
-class PhoneMemory {
-  const PhoneMemory({
-    required this.usageAccessGranted,
-    required this.ramTotalBytes,
-    required this.ramAvailableBytes,
-    required this.retentionStartMillis,
-    required this.retentionEndMillis,
-  });
-
-  final bool usageAccessGranted;
-
-  /// Live device totals from /proc/meminfo — permission-free, unlike
-  /// ActivityManager.getMemoryInfo (deprecated at API 34).
-  final int ramTotalBytes;
-  final int ramAvailableBytes;
-
-  /// How far back usage history goes, so a 30-day window on a phone with 3 days
-  /// of history can say so instead of showing near-zero numbers.
-  final int retentionStartMillis;
-  final int retentionEndMillis;
-
-  int get retentionDays =>
-      ((retentionEndMillis - retentionStartMillis) / (24 * 60 * 60 * 1000))
-          .floor();
-
-  /// Effective largest window the history can actually fill.
-  int usableWindow(int days) {
-    if (retentionDays <= 0) return days;
-    return days > retentionDays ? retentionDays : days;
-  }
+  Future<List<ManagedApp>> ranked({int limit = 100});
 }

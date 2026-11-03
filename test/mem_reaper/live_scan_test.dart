@@ -42,7 +42,7 @@ void main() {
     test('ps is given one -o holding the whole format list', () async {
       // Splitting 'pid=,uid=,comm=' across arguments makes ps read 'uid=' as a
       // user operand and fail with "illegal argument", which is a scan that
-      // never worked rather than a phone with nothing running.
+      // never worked rather than a machine with nothing running.
       final runner = _CannedRunner({'id': '501\n', 'top': top, 'ps': ''});
       final backend = MacOSMemReaperBackend(runner: runner);
       await backend.ranked();

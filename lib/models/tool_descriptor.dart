@@ -3,7 +3,7 @@ enum Support {
   /// The tool runs here and the app can really control it.
   full,
 
-  /// The tool exists here but the OS caps what it can do (Android).
+  /// The tool exists here but the OS caps what it can do.
   cappedByOs,
 
   /// The tool exists for this platform, but the native helper it drives is not
@@ -42,8 +42,6 @@ enum ToolAction {
 
   /// Move the chosen caches to the Trash. Never a delete.
   trashCaches,
-  openAppInfo,
-  requestUsageAccess,
 
   /// Take the fan out of Apple's control now, with the settings on screen.
   engage,

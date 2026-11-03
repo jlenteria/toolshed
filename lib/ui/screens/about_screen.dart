@@ -51,7 +51,7 @@ class AboutScreen extends StatelessWidget {
                   icon: Icons.verified_outlined,
                   text:
                       'No third-party packages: every read is dart:io or a '
-                      'platform channel, so nothing drifts upstream.',
+                      'command the OS ships, so nothing drifts upstream.',
                 ),
                 FactRow(
                   icon: Icons.lock_outline,
@@ -62,8 +62,8 @@ class AboutScreen extends StatelessWidget {
                 FactRow(
                   icon: Icons.devices_outlined,
                   text:
-                      'macOS, Linux, Windows and Android, with each tool '
-                      'stating what it can actually do on that device.',
+                      'macOS, Linux and Windows, with each tool stating what it '
+                      'can actually do on that device.',
                 ),
               ],
             ),
@@ -93,7 +93,6 @@ class AboutScreen extends StatelessWidget {
     'macos' => 'macOS',
     'linux' => 'Linux',
     'windows' => 'Windows',
-    'android' => 'Android',
     final other => other,
   };
 }

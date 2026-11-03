@@ -17,7 +17,6 @@ import 'fan_ctl/fan_backend.dart';
 import 'fan_ctl/fan_daemon.dart';
 import 'fan_ctl/fan_policy.dart';
 import 'fan_ctl/fan_telemetry.dart';
-import 'mem_reaper/android_backend.dart';
 import 'mem_reaper/macos_backend.dart';
 import 'mem_reaper/managed_app.dart';
 import 'mem_reaper/stop_outcome.dart';
@@ -85,7 +84,6 @@ class ToolRegistry extends ChangeNotifier {
   /// button for an OS where the tool cannot run.
   static ToolBackend _memReaperBackend() {
     if (Platform.isMacOS) return MacOSMemReaperBackend();
-    if (Platform.isAndroid) return const AndroidMemReaperBackend();
     if (Platform.isWindows) {
       return UnsupportedToolBackend(
         descriptor: const ToolDescriptor(
@@ -118,8 +116,9 @@ class ToolRegistry extends ChangeNotifier {
   }
 
   /// Port listing needs only a command that prints the socket table, so every
-  /// desktop gets a real backend. Android gets none: its socket table has no
-  /// owner an unrooted app can read, and it cannot stop another app anyway.
+  /// desktop gets a real backend. Any other platform gets none: it has no
+  /// socket table whose owner an app can read, and no way to signal another
+  /// process anyway.
   static ToolBackend _portWardenBackend() {
     if (Platform.isMacOS) return MacOSPortWardenBackend();
     if (Platform.isLinux) return LinuxPortWardenBackend();
@@ -132,17 +131,16 @@ class ToolRegistry extends ChangeNotifier {
         implPath: 'lsof',
       ),
       reason:
-          'Android gives an app no readable socket-to-process table: '
-          '/proc/net/tcp lists sockets without the pids that own them, and '
-          'mapping them needs root. It also cannot stop another app. This tool '
-          'is for the desktop.',
+          'Reading a socket-to-process table needs one of the desktop tools — '
+          'lsof, ss or netstat — and freeing the port needs to signal the '
+          'process that owns it. This tool is for the desktop.',
     );
   }
 
   /// Dev Sweeper needs only the file system and the platform Trash, so every
-  /// desktop gets a real backend. Android gets none: an unrooted app can see
-  /// its own cache and no one else's, which is not the developer caches this
-  /// tool is for.
+  /// desktop gets a real backend. Any other platform gets none: it can see its
+  /// own cache and no one else's, which is not the developer caches this tool
+  /// is for.
   static ToolBackend _devSweeperBackend() {
     if (Platform.isMacOS) return MacDevSweeperBackend();
     if (Platform.isLinux) return LinuxDevSweeperBackend();
@@ -157,17 +155,16 @@ class ToolRegistry extends ChangeNotifier {
         implPath: 'du · find · Trash',
       ),
       reason:
-          'Android gives an app no view of other apps\' caches: an unrooted '
-          'phone exposes only this app\'s own storage. The developer caches '
-          'this tool is for are out of reach, so it is listed rather than '
-          'offering a button that cannot work.',
+          'This tool walks a developer home directory and hands what it finds '
+          'to the platform Trash. A sandboxed platform exposes only this app\'s '
+          'own storage, so there is nothing to sweep and no Trash to put it in.',
     );
   }
 
   /// Docker is driven through the `docker` CLI, so every desktop gets a real
   /// backend — and on every desktop the backend itself reports `helperMissing`
   /// when no CLI is found, so the tool is listed with a reason rather than dead
-  /// buttons. Android is excluded: an unrooted app has no docker CLI, no daemon
+  /// buttons. Any other platform is excluded: it has no docker CLI, no daemon
   /// and no engine context to reach, so there is nothing for the console to
   /// drive.
   static ToolBackend _dockerBackend() {
@@ -185,9 +182,9 @@ class ToolRegistry extends ChangeNotifier {
         implPath: 'docker',
       ),
       reason:
-          'Docker runs on the machine that owns the engine. An Android app has '
-          'no docker CLI, no daemon and no context to talk to, so this tool '
-          'is for the desktop.',
+          'Docker runs on the machine that owns the engine. A sandboxed '
+          'platform has no docker CLI, no daemon and no context to talk to, so '
+          'this tool is for the desktop.',
     );
   }
 
@@ -207,23 +204,19 @@ class ToolRegistry extends ChangeNotifier {
     );
     return UnsupportedToolBackend(
       descriptor: descriptor,
-      reason: Platform.isAndroid
-          ? 'Android gives an app no way to touch the thermal controller. '
-                'Fan speed on a phone is the kernel thermal daemon\'s decision '
-                'alone, and an unrooted app cannot reach it.'
-          : 'Fan control drives the Apple System Management Controller through '
-                'IOKit, which exists only on macOS. A Windows or Linux '
-                'equivalent would be a different tool with different hardware, '
-                'not a port of this one.',
+      reason:
+          'Fan control drives the Apple System Management Controller through '
+          'IOKit, which exists only on macOS. A Windows or Linux equivalent '
+          'would be a different tool with different hardware, not a port of '
+          'this one.',
     );
   }
 
   /// App lock is a macOS tool because the whole mechanism is macOS: an
   /// `NSWorkspace` launch notification, `terminate()` on a running application,
-  /// and a per-user LaunchAgent. Android has no way for one app to close another
-  /// (that is the device-admin/API-consent path, and it does not offer a
-  /// per-app gate either), and Windows would be a different tool against
-  /// different APIs, so both are listed with a reason rather than a button.
+  /// and a per-user LaunchAgent. No other platform hands an app that pair of
+  /// primitives — Windows and Linux would be a different tool against different
+  /// APIs — so anything else is listed with a reason rather than a button.
   static ToolBackend _appLockBackend() {
     if (Platform.isMacOS) return MacAppLockBackend();
     const descriptor = ToolDescriptor(
@@ -236,15 +229,11 @@ class ToolRegistry extends ChangeNotifier {
     );
     return UnsupportedToolBackend(
       descriptor: descriptor,
-      reason: Platform.isAndroid
-          ? 'Android does not let one app close another. A device-admin app can '
-                'lock the *screen*, but a per-app gate is the system\'s own '
-                'Digital Wellbeing feature and no third-party app can install '
-                'one.'
-          : 'App lock closes another process by asking it to quit, which on '
-                'macOS is an NSWorkspace application handle plus `terminate()`. '
-                'Windows and Linux would need a different mechanism entirely, '
-                'and none has been written.',
+      reason:
+          'App lock closes another process by asking it to quit, which on '
+          'macOS is an NSWorkspace application handle plus `terminate()`. '
+          'Windows and Linux would need a different mechanism entirely, and '
+          'none has been written.',
     );
   }
 
@@ -629,15 +618,9 @@ class ToolRegistry extends ChangeNotifier {
     return entry.backend.tailLog();
   }
 
-  PhoneMemorySource? phoneSource(String id) {
-    final entry = byId(id);
-    if (entry?.backend case final PhoneMemorySource source) return source;
-    return null;
-  }
-
-  Future<List<ManagedApp>> ranked(ToolEntry entry, {int windowDays = 7}) async {
+  Future<List<ManagedApp>> ranked(ToolEntry entry) async {
     if (entry.backend case final MemoryRanking ranking) {
-      return ranking.ranked(windowDays: windowDays);
+      return ranking.ranked();
     }
     throw ToolException('NO_RANKING', entry.capabilities.reason);
   }

@@ -131,7 +131,7 @@ void main() {
       );
       await expectLater(
         backend.stopProcess(
-          const ManagedApp(id: 'com.example.app', name: 'Phone row'),
+          const ManagedApp(id: 'com.example.app', name: 'Not a pid'),
         ),
         throwsA(isA<ToolException>()),
       );

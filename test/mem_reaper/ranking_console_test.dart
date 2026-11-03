@@ -27,10 +27,7 @@ class _B extends ToolBackend implements MemoryRanking, ProcessReaper {
     reason: 'r',
   );
   @override
-  Future<List<ManagedApp>> ranked({
-    int windowDays = 7,
-    int limit = 100,
-  }) async => [
+  Future<List<ManagedApp>> ranked({int limit = 100}) async => [
     for (final (i, (n, gb)) in [
       ('Google Chrome Helper (Renderer)', 3.4),
       ('Xcode', 2.1),
