@@ -64,8 +64,8 @@ class MacOSFanBackend implements ToolBackend, FanControl {
     id: 'fan_ctl',
     name: 'Fan Control',
     summary:
-        'Watches a temperature sensor and holds the fan up once it crosses '
-        'your threshold, then hands it back to Apple when it cools off.',
+        'Holds every fan at a speed you set, and hands them back to macOS when '
+        'you let go.',
     implPath: helperPath ?? 'macos/fanctl/main.swift',
   );
 
@@ -110,6 +110,7 @@ class MacOSFanBackend implements ToolBackend, FanControl {
         if (_installer.isInstalled) ...[
           ToolAction.start,
           ToolAction.stop,
+          ToolAction.update,
           ToolAction.uninstall,
           ToolAction.engage,
           ToolAction.releaseControl,
@@ -209,25 +210,45 @@ class MacOSFanBackend implements ToolBackend, FanControl {
 
   // ------------------------------------------------------------------- control
 
+  /// Sends the manual hold. The switch is the only state this puts on the wire,
+  /// so being asked to engage a policy that is not holding is a bug in the
+  /// console rather than something to argue with — and a success message about a
+  /// fan that never spun is the one answer this backend must never give.
   @override
   Future<void> engage(FanPolicy policy) async {
-    if (!policy.enabled) {
-      // The daemon would take this policy and do nothing with it, so a success
-      // message here would be a claim about a fan that never spun.
+    if (!policy.manualOn) {
       throw const ToolException(
-        'POLICY_DISABLED',
-        'The policy is switched off, so engaging it would change nothing. Turn '
-            '"Policy enabled" on first.',
+        'NOT_A_HOLD',
+        'The manual switch is off, so there is nothing to engage. Turn '
+            '"Fan manual ON" on.',
       );
     }
     final reason = _refusal(policy);
     if (reason != null) throw ToolException('INVALID_POLICY', reason);
     await _writePolicyFile(policy);
-    final status = await _daemon.apply(policy);
+    final FanDaemonStatus? status;
+    try {
+      status = await _daemon.apply(policy);
+    } on ToolException catch (failure) {
+      // One refusal means something specific. A daemon installed before this
+      // cut-down cannot decode three keys it has never seen, and answers with a
+      // complaint about the request's shape rather than about the fan — which is
+      // the sign to update the helper, not the sign to edit a number.
+      if (failure.message.contains('not a toolshed-fand request')) {
+        throw const ToolException(
+          'DAEMON_TOO_OLD',
+          'The installed fan daemon does not understand this request, so it '
+              'predates this app.',
+          detail:
+              'Press "Update daemon" to put this app\'s helper in its place.',
+        );
+      }
+      rethrow;
+    }
     _active = policy;
     _startRenewal();
     _notice = status == null
-        ? 'The policy was saved but the daemon did not answer.'
+        ? 'The hold was sent but the daemon did not answer.'
         : null;
   }
 
@@ -236,10 +257,10 @@ class MacOSFanBackend implements ToolBackend, FanControl {
     await _daemon.clear();
     _active = null;
     _stopRenewal();
-    // The saved file follows the release: "released" and "a policy that turns
-    // the fan back on at the next launchd reload" cannot both be true.
+    // The saved file follows the release: "released" and "a policy that pins the
+    // fans again at the next launchd reload" cannot both be true.
     final saved = await _readPolicyFile();
-    await _writePolicyFile(saved.copyWith(enabled: false));
+    await _writePolicyFile(saved.copyWith(manualOn: false));
   }
 
   /// The lease is what keeps a hold honest: it expires unless the app that asked

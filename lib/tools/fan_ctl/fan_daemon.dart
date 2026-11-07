@@ -4,9 +4,9 @@ import 'fan_telemetry.dart';
 /// What the daemon is doing right now — the only account of the hardware that
 /// comes from the process which actually writes to it.
 ///
-/// Mirrors `Reply.Status` in `macos/fanctl/main.swift`. The decision law lives
-/// there and nowhere in Dart, so the reason string below is the daemon's own
-/// sentence about why it acted, not a guess made here.
+/// Mirrors `Reply.Status` in `macos/fanctl/main.swift`. Nothing is decided here,
+/// so the reason string below is the daemon's own sentence about why it acted,
+/// not a guess made in the UI about hardware it cannot touch.
 class FanDaemonStatus {
   const FanDaemonStatus({
     required this.pid,
@@ -21,7 +21,6 @@ class FanDaemonStatus {
     required this.leaseExpiresAt,
     required this.startedAt,
     required this.ticks,
-    required this.celsius,
   });
 
   final int pid;
@@ -46,15 +45,12 @@ class FanDaemonStatus {
   final DateTime startedAt;
   final int ticks;
 
-  /// The temperature the policy is acting on, as the daemon last read it.
-  final double? celsius;
-
   bool get isHolding => applied == 'holding';
 
-  /// A policy is in force either while the fan is being held or while the lease
-  /// that would let it be held still has time to run. Below the threshold the
-  /// daemon answers `automatic` with a live lease, and that is still a policy
-  /// the console must show instead of the file behind it.
+  /// A hold is in force either while a fan is being held or while the lease that
+  /// would let it be held still has time to run. With the switch off and no lease
+  /// there is nothing armed, and the file behind the daemon is what the console
+  /// should show instead of a leftover hold.
   bool get isArmed => isHolding || leaseExpiresAt != null;
 
   bool get leaseRunningOut {
@@ -86,7 +82,6 @@ class FanDaemonStatus {
           : DateTime.fromMillisecondsSinceEpoch(expires * 1000),
       startedAt: DateTime.fromMillisecondsSinceEpoch(started * 1000),
       ticks: (json['ticks'] as num?)?.toInt() ?? 0,
-      celsius: (json['celsius'] as num?)?.toDouble(),
     );
   }
 }

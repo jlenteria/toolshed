@@ -195,25 +195,42 @@ class _LockScreenState extends State<LockScreen> {
   }
 
   /// The phrase lives only in this method and the helper's stdin; it is never
-  /// stored on the state.
+  /// stored on the state. The dialog itself asks the agent and stays open on a
+  /// wrong phrase, so one typo does not dismiss the gate and make the user
+  /// reopen it.
   Future<void> _unlock(LockableApp app) async {
-    final pass = await showDialog<String>(
+    final opened = await showDialog<bool>(
       context: context,
-      builder: (_) =>
-          _PassphraseDialog(app: app, minutes: _draft.unlockMinutes),
+      builder: (_) => _PassphraseDialog(
+        app: app,
+        minutes: _draft.unlockMinutes,
+        attempt: (passphrase) async {
+          final answer = await widget.registry.unlockApp(
+            _id,
+            app.bundleId,
+            passphrase,
+          );
+          await _refresh(withApps: true);
+          if (answer == true) return null;
+          return widget.entry.error ??
+              'That passphrase did not match, so ${app.name} is still '
+                  'locked. The guess was written to the agent log, not here.';
+        },
+      ),
     );
-    if (pass == null || pass.isEmpty || !mounted) return;
-    await _act(
-      () => widget.registry.unlockApp(_id, app.bundleId, pass),
-      doing: 'Opening ${app.name}',
-      outcome: () =>
-          '${app.name} is unlocked while it is in front. Once it has been in '
-          'the background for ${_draft.unlockMinutes} min, the watcher closes '
-          'it and asks for the passphrase again.',
-      refused: () =>
-          'That passphrase did not match, so ${app.name} is still locked. The '
-          'guess was written to the agent log, not here.',
-    );
+    if (opened != true || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            '${app.name} is unlocked while it is in front. Once it has been in '
+            'the background for ${_draft.unlockMinutes} min, the watcher closes '
+            'it and asks for the passphrase again.',
+          ),
+          duration: const Duration(seconds: 5),
+        ),
+      );
   }
 
   Future<void> _closeNow(LockableApp app) => _act(
@@ -808,10 +825,11 @@ class _PassphraseCard extends StatelessWidget {
                       'Raises the real dialog for the first locked app, the '
                       'same window the watcher raises on a launch. A matching '
                       'phrase opens the app until it has been idle for the '
-                      'unlock window; a wrong phrase leaves it closed. The '
-                      'dialog waits a minute, then goes away unanswered — an '
-                      'app should not be held closed by a dialog nobody is '
-                      'looking at.',
+                      'unlock window; a wrong phrase keeps the dialog open for '
+                      'another try. It leaves only when you choose to leave the '
+                      'app closed, or after a minute unanswered — an app '
+                      'should not be held closed by a dialog nobody is looking '
+                      'at.',
                   onPressed: testBlock == null ? onTest : null,
                   blocked: testBlock,
                 ),
@@ -1245,10 +1263,19 @@ class _RulesCard extends StatelessWidget {
 }
 
 class _PassphraseDialog extends StatefulWidget {
-  const _PassphraseDialog({required this.app, required this.minutes});
+  const _PassphraseDialog({
+    required this.app,
+    required this.minutes,
+    required this.attempt,
+  });
 
   final LockableApp app;
   final int minutes;
+
+  /// Asks the agent once. Null means the phrase opened the app; any other
+  /// return value is the reason it did not, shown here while the dialog stays
+  /// open for another try.
+  final Future<String?> Function(String passphrase) attempt;
 
   @override
   State<_PassphraseDialog> createState() => _PassphraseDialogState();
@@ -1256,6 +1283,8 @@ class _PassphraseDialog extends StatefulWidget {
 
 class _PassphraseDialogState extends State<_PassphraseDialog> {
   final TextEditingController _field = TextEditingController();
+  bool _checking = false;
+  String? _error;
 
   @override
   void dispose() {
@@ -1290,9 +1319,10 @@ class _PassphraseDialogState extends State<_PassphraseDialog> {
               autocorrect: false,
               enableSuggestions: false,
               onSubmitted: (_) => _submit(),
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Passphrase',
                 isDense: true,
+                errorText: _error,
               ),
             ),
           ],
@@ -1300,18 +1330,44 @@ class _PassphraseDialogState extends State<_PassphraseDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _checking ? null : () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: _field.text.isEmpty ? null : _submit,
-          child: const Text('Open it'),
+          onPressed: _field.text.isEmpty || _checking ? null : _submit,
+          child: _checking
+              ? const SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Open it'),
         ),
       ],
     );
   }
 
-  void _submit() => Navigator.of(context).pop(_field.text);
+  Future<void> _submit() async {
+    final passphrase = _field.text;
+    if (passphrase.isEmpty || _checking) return;
+    setState(() {
+      _checking = true;
+      _error = null;
+    });
+    final refusal = await widget.attempt(passphrase);
+    if (!mounted) return;
+    if (refusal == null) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    // The dialog survives a wrong guess: closing it would turn one typo into
+    // having to find and press the unlock button all over again.
+    _field.clear();
+    setState(() {
+      _checking = false;
+      _error = refusal;
+    });
+  }
 }
 
 String _clock(DateTime time) =>

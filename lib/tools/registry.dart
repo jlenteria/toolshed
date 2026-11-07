@@ -198,8 +198,8 @@ class ToolRegistry extends ChangeNotifier {
       id: 'fan_ctl',
       name: 'Fan Control',
       summary:
-          'Holds the fan up once a temperature sensor crosses your threshold, '
-          'then hands it back to the firmware when it cools off.',
+          'Holds every fan at a speed you set, and hands them back to macOS '
+          'when you let go.',
       implPath: 'macos/fanctl/main.swift',
     );
     return UnsupportedToolBackend(

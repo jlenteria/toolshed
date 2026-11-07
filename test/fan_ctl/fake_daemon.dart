@@ -11,11 +11,15 @@ import 'package:toolshed/tools/fan_ctl/fan_policy.dart';
 /// [ProcessRunner] is the real boundary: nothing here can pass for a fan write
 /// that would not have reached a socket.
 class FakeDaemon extends ProcessRunner {
-  FakeDaemon({this.answers = true, String? telemetry})
+  /// Set to make the daemon answer every control request the way an old helper
+  /// answers a request shape it has never seen: a refusal about the envelope,
+  /// not about the fan.
+  FakeDaemon({this.answers = true, this.refuses, String? telemetry})
     : telemetryStdout = telemetry ?? _idleMachine;
 
   final List<Map<String, Object?>> received = [];
   final String telemetryStdout;
+  final String? refuses;
   bool answers;
 
   /// When set, every call waits for it before answering — a helper that is
@@ -64,6 +68,15 @@ class FakeDaemon extends ProcessRunner {
     }
     switch (request['cmd']) {
       case 'apply':
+        final refusal = refuses;
+        if (refusal != null) {
+          return ProcResult(
+            executable,
+            1,
+            jsonEncode({'ok': false, 'error': refusal}),
+            '',
+          );
+        }
         _held = Map<String, Object?>.from(request['policy']! as Map);
       case 'clear':
         _held = null;

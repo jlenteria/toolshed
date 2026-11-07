@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:toolshed/tools/fan_ctl/fan_backend.dart';
+import 'package:toolshed/tools/fan_ctl/fan_policy.dart';
 import 'package:toolshed/tools/fan_ctl/fan_screen.dart';
 import 'package:toolshed/tools/registry.dart';
 
@@ -12,8 +13,8 @@ import 'fake_daemon.dart';
 
 /// The real console over a daemon that is a list of requests.
 ///
-/// [MacOSFanBackend] is used rather than a stub so the capabilities it computes
-/// are the ones the buttons are drawn from. What is fake is the process
+/// [MacOSFanBackend] is used rather than a stub so the capabilities the buttons
+/// are drawn from are the ones the backend computed. What is fake is the process
 /// boundary and the policy file, the only two things a widget test may touch on
 /// the machine it runs on.
 class Console {
@@ -46,12 +47,19 @@ class Console {
     if (scratch.existsSync()) scratch.deleteSync(recursive: true);
   }
 
+  /// Cancelling a hold's renewal timer is the point: the widget test verifies
+  /// that nothing is still ticking before it runs its own tear-downs.
   bool _disposed = false;
-}
 
-/// The info badge that belongs to one named action, so a test points at the
-/// badge it means rather than at any other info icon the window draws.
-Finder badge(String action) => find.byKey(ValueKey('note:$action'));
+  /// Verbs the daemon was sent after the console finished opening, so a test
+  /// counts the taps rather than the reads the screen does by itself.
+  List<String> verbsSince(int mark) => [
+    for (final request in daemon.received.skip(mark)) request['cmd']! as String,
+  ];
+
+  Map<String, Object?> savedPolicy() =>
+      Map<String, Object?>.from(jsonDecode(policy.readAsStringSync()) as Map);
+}
 
 void main() {
   late Console console;
@@ -87,62 +95,122 @@ void main() {
     await tester.pump(const Duration(seconds: 15));
   }
 
-  testWidgets('groups the policy into what starts, does and ends a hold', (
-    tester,
-  ) async {
+  Future<void> flipSwitch(WidgetTester tester) async {
+    await tester.tap(find.byType(Switch));
+    await settle(tester);
+  }
+
+  testWidgets('the whole tool is one switch and one number', (tester) async {
     await open(tester);
 
     expect(tester.takeException(), isNull);
-    expect(find.text('WHAT STARTS A HOLD'), findsOneWidget);
-    expect(find.text('WHAT A HOLD DOES'), findsOneWidget);
-    expect(find.text('WHAT ENDS IT'), findsOneWidget);
-    // The fan the read reported, not a placeholder: the console is only worth
-    // its numbers if they came from the helper.
-    expect(find.textContaining('Fan 0'), findsWidgets);
-    expect(find.text('Take control'), findsOneWidget);
-    expect(find.text('Give back now'), findsOneWidget);
-    expect(find.text('Save only'), findsOneWidget);
-    expect(find.byIcon(Icons.info_outline), findsAtLeastNWidgets(3));
+    expect(find.text('Fan manual ON'), findsOneWidget);
+    expect(find.byType(Switch), findsOneWidget);
+    expect(find.byType(Slider), findsOneWidget);
+
+    // The control law this console used to ship, and the buttons that carried
+    // it. Anything left of them is a control that no longer has anything to do.
+    expect(find.text('Take control'), findsNothing);
+    expect(find.text('Save only'), findsNothing);
+    expect(find.text('Give back now'), findsNothing);
+    expect(find.text('Test writes'), findsNothing);
+    expect(find.text('WHAT STARTS A HOLD'), findsNothing);
   });
 
-  testWidgets('each button carries its explanation behind an info badge', (
+  testWidgets('nothing in the tree reads a temperature', (tester) async {
+    await open(tester);
+    await flipSwitch(tester);
+
+    // The helper still reports sensors, and the fake feeds them in, because the
+    // slider's floor and ceiling come from the fans beside them. Not one of
+    // those numbers may reach the screen: this tool does not act on heat.
+    expect(find.textContaining('°'), findsNothing);
+    expect(find.textContaining('TCMz'), findsNothing);
+    expect(find.textContaining('celsius'), findsNothing);
+    expect(find.textContaining('CPU package'), findsNothing);
+    expect(tester.takeException(), isNull);
+    console.dispose();
+  });
+
+  testWidgets('the slider spans the range the helper reports', (tester) async {
+    await open(tester);
+
+    final slider = tester.widget<Slider>(find.byType(Slider));
+    expect(slider.min, 1199, reason: 'Fan 0 of this Mac idles at 1199 rpm');
+    expect(slider.max, 7199);
+    expect(find.textContaining('between 1199 and 7199 rpm'), findsOneWidget);
+  });
+
+  testWidgets('flipping the switch on issues one apply that says manual', (
     tester,
   ) async {
     await open(tester);
+    final mark = console.daemon.received.length;
 
-    expect(
-      find.textContaining('The only button here that touches the fan'),
-      findsNothing,
-    );
+    await flipSwitch(tester);
 
-    await tester.tap(badge('engage'));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('The only button here that touches the fan'),
-      findsOneWidget,
+    expect(console.verbsSince(mark), contains('apply'));
+    final applied = FanPolicy.fromJson(
+      console.daemon.applied.first.toJson().cast<String, Object?>(),
     );
-    // The open badge fills in, so it is obvious which control is speaking.
-    expect(
-      find.descendant(of: badge('engage'), matching: find.byIcon(Icons.info)),
-      findsOneWidget,
-    );
+    expect(applied.manualOn, isTrue);
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isTrue);
+    expect(find.textContaining('every fan is being held'), findsOneWidget);
+    console.dispose();
+  });
 
-    // Reading the next one closes the previous, so the bar never stacks notes
-    // and shifts its own buttons out from under the reader.
-    await tester.tap(badge('save'));
-    await tester.pumpAndSettle();
-    expect(
-      find.textContaining('The only button here that touches the fan'),
-      findsNothing,
-    );
-    expect(
-      find.textContaining('Writes these numbers to disk and sends nothing'),
-      findsOneWidget,
-    );
+  testWidgets('flipping it back off releases the fans and says so on disk', (
+    tester,
+  ) async {
+    await open(tester);
+    await flipSwitch(tester);
+    final mark = console.daemon.received.length;
 
-    await tester.tap(badge('save'));
-    await tester.pumpAndSettle();
-    expect(find.byIcon(Icons.info), findsNothing);
+    await flipSwitch(tester);
+
+    expect(console.verbsSince(mark), contains('clear'));
+    expect(tester.widget<Switch>(find.byType(Switch)).value, isFalse);
+    expect(console.savedPolicy()['manualOn'], isFalse);
+    expect(find.textContaining('Not holding.'), findsOneWidget);
+  });
+
+  testWidgets(
+    'moving the number with the switch off saves and touches nothing',
+    (tester) async {
+      await open(tester);
+      final mark = console.daemon.received.length;
+
+      await tester.drag(find.byType(Slider), const Offset(120, 0));
+      await settle(tester);
+
+      expect(
+        console.verbsSince(mark),
+        isNot(anyOf(contains('apply'), contains('clear'))),
+        reason: 'a slider behind an off switch reached the hardware',
+      );
+      expect(
+        (console.savedPolicy()['holdRpm'] as num).toDouble(),
+        greaterThan(FanPolicy.defaults.holdRpm),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('moving the number while holding re-applies it', (tester) async {
+    await open(tester);
+    await flipSwitch(tester);
+    final mark = console.daemon.received.length;
+
+    await tester.drag(find.byType(Slider), const Offset(120, 0));
+    await settle(tester);
+
+    expect(console.verbsSince(mark), contains('apply'));
+    expect(
+      console.daemon.applied.last.holdRpm,
+      greaterThan(FanPolicy.defaults.holdRpm),
+    );
+    expect(tester.takeException(), isNull);
+    console.dispose();
   });
 
   testWidgets('the refresh button leaves a bar in the body while it reads', (
@@ -171,60 +239,15 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
-  testWidgets('the bar survives a window too narrow for two buttons', (
+  testWidgets('the bar survives a window too narrow for the daemon buttons', (
     tester,
   ) async {
     await open(tester, width: 380);
 
     // An overflow in a test is an exception rather than a visual problem to be
-    // noticed later, and the action bar is the one row that packs two buttons.
+    // noticed later, and the action row is the one place that packs buttons.
     expect(tester.takeException(), isNull);
-    expect(find.text('Give back now'), findsOneWidget);
-    expect(find.text('Save only'), findsOneWidget);
+    expect(find.byType(Slider), findsOneWidget);
+    expect(find.text('Update daemon'), findsOneWidget);
   });
-
-  testWidgets('Save only writes the file and sends no verb that moves a fan', (
-    tester,
-  ) async {
-    await open(tester);
-    // Opening the console reads the machine, so the test counts the verbs after
-    // the tap rather than the whole conversation.
-    final opened = console.daemon.cmds.length;
-
-    await tester.tap(find.text('Save only'));
-    await settle(tester);
-
-    expect(
-      console.daemon.cmds.sublist(opened),
-      isNot(anyOf(contains('apply'), contains('clear'))),
-      reason: 'a save reached the hardware',
-    );
-    expect(console.policy.existsSync(), isTrue);
-    expect(
-      jsonDecode(console.policy.readAsStringSync()),
-      containsPair('targetTempC', 70.0),
-    );
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets(
-    'Take control answers with an apply, or with the reason it can\'t',
-    (tester) async {
-      await open(tester);
-      final opened = console.daemon.cmds.length;
-
-      final control = find.widgetWithIcon(FilledButton, Icons.air);
-      if (tester.widget<FilledButton>(control).onPressed == null) {
-        // On a machine without the root daemon the button is dead, and the console
-        // has to say why beside itself rather than let the tap go nowhere.
-        expect(find.textContaining('needs the root daemon'), findsOneWidget);
-        return;
-      }
-      await tester.tap(control);
-      await settle(tester);
-
-      expect(console.daemon.cmds.sublist(opened), contains('apply'));
-      console.dispose();
-    },
-  );
 }

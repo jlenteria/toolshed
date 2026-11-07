@@ -475,7 +475,7 @@ class _Controls extends StatelessWidget {
         _ => 'Settings',
       },
       switch ((fan, lock)) {
-        (true, _) => 'Live temperatures, the threshold and the hold',
+        (true, _) => 'The manual switch and the speed it holds',
         (_, true) => 'What is watching, what is locked, and the passphrase',
         _ => 'Thresholds and agent options',
       },

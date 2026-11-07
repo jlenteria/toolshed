@@ -17,20 +17,27 @@
 //  Roles:
 //    telemetry   read sensors and fans, print JSON. Never writes, run as the user.
 //    selftest    report whether this process may write fan control at all.
-//    keys        enumerate SMC keys (diagnostics; used to pick sensor groups).
-//    serve       the root daemon: applies a policy on a loop, answers the socket.
+//    keys        enumerate SMC keys (diagnostics).
+//    serve       the root daemon: holds the fans on a loop, answers the socket.
 //    client      one request/reply round trip to the daemon, for the Flutter app.
-//    selfcheck   run the policy decision table, no hardware, for CI.
+//    selfcheck   run the hold decision table, no hardware, for CI.
+//
+//  What this daemon does is one thing: while the manual switch is on, it asks
+//  every fan for a speed. Deciding when a machine needs cooling is macOS's job —
+//  `thermalmonitord` has the whole sensor fleet, the load history and the curves
+//  for this exact model, and a threshold in a config file competes with that and
+//  loses. So there is no trigger temperature, no ramp and no hysteresis here.
 //
 //  The safety model, in order of precedence:
-//    1. A policy can only ever ask for *more* cooling. The rpm written is
-//       clamped to at least the fan's own minimum (F0Mn), so a stale or badly
-//       configured policy cannot leave the machine quieter than Apple would.
-//    2. Above `criticalTempC` the daemon stops writing and returns the fan to
-//       automatic control, because Apple's own curve is more aggressive at that
-//       point than any floor a user can configure.
-//    3. `leaseSeconds` expiry, SIGTERM and a policy that is disabled each put the
-//       fan back to automatic, so an orphaned daemon does not hold the fans.
+//    1. A hold can only ever ask for *more* cooling than the machine chose. The
+//       rpm written is clamped into [F{n}Mn, F{n}Mx], so it cannot go below
+//       Apple's own idle floor and cannot exceed what the impeller can turn.
+//    2. `leaseSeconds` expiry, SIGTERM and `clear` each hand every held fan back
+//       to automatic control. The lease is the whole safety story now that no
+//       temperature can end a hold: it is what un-pins the fans if the app that
+//       asked for the hold is killed rather than closed.
+//    3. A daemon that starts with no policy releases every fan it finds forced,
+//       so crash residue from an older run does not survive this one.
 //
 //  The SMC wire protocol (key/value struct, selectors 5/6/8/9, kernel index 2)
 //  is Apple's undocumented interface, reproduced here as described by several
@@ -431,53 +438,53 @@ func groupMaximums(_ sensors: [Sensor]) -> [String: Double] {
     return out
 }
 
-func selectedTemperature(_ sensors: [Sensor], group: String) -> Double? {
-    let maximums = groupMaximums(sensors)
-    if let named = maximums[group] { return named }
-    return maximums["all"]
-}
-
 // ------------------------------------------------------------------ the policy
 
 struct Policy: Codable {
-    var enabled: Bool = true
-    var fan: Int = 0
-    var group: String = SensorGroup.cpu.rawValue
+    /// The only switch, and the only one the console offers: hold every fan at
+    /// [holdRpm] whatever the sensors say. Off hands them back to Apple.
+    var manualOn: Bool = false
 
-    /// At or above this the daemon takes over from Apple's curve.
-    var targetTempC: Double = 70
+    /// The speed asked of every fan, clamped into each fan's own range on the
+    /// way out — see `heldRpm`.
     var holdRpm: Double = 2_400
 
-    /// Extra rpm per degree above the target, so the fan answers the load
-    /// instead of sitting at one number.
-    var rampPerDegree: Double = 250
-
-    /// Disengage only this far below the target, otherwise a temperature sitting
-    /// on the threshold flips the fan between two states every tick.
-    var hysteresisC: Double = 3
-    var intervalSeconds: Int = 3
-
-    /// Hand the fans back to Apple: its own curve is steeper than any floor a
-    /// user can configure, so at this point automatic control is the safer bet.
-    var criticalTempC: Double = 95
-
     /// Give up control if the app stops renewing. 0 holds until told otherwise.
-    /// The default is a lease rather than forever: a hand-written request that
-    /// forgets this field must not leave a fan forced after the client is gone.
+    /// The default is a lease rather than forever, and the lease is now the whole
+    /// safety story: nothing else can end a hold, so an expired lease is the only
+    /// thing that un-pins the fans when the app that asked for them dies.
     /// `FanPolicy.defaults` in Dart is the same number, and `fan_protocol_test`
     /// pins the two together.
     var leaseSeconds: Int = 30
 
-    static let nearCriticalMarginC = 5.0
+    init(manualOn: Bool = false, holdRpm: Double = 2_400, leaseSeconds: Int = 30) {
+        self.manualOn = manualOn
+        self.holdRpm = holdRpm
+        self.leaseSeconds = leaseSeconds
+    }
+
+    /// Hand-written rather than synthesized, and that difference is the point: a
+    /// synthesized decoder throws `keyNotFound` for an absent key no matter what
+    /// the property defaults to, so a hand-written or leaner request would be
+    /// refused rather than read. Every key here is optional.
+    init(from decoder: Decoder) throws {
+        let box = try decoder.container(keyedBy: CodingKeys.self)
+        manualOn = try box.decodeIfPresent(Bool.self, forKey: .manualOn) ?? false
+        holdRpm = try box.decodeIfPresent(Double.self, forKey: .holdRpm) ?? 2_400
+        leaseSeconds = try box.decodeIfPresent(Int.self, forKey: .leaseSeconds) ?? 30
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case manualOn, holdRpm, leaseSeconds
+    }
+
+    /// How far the asked speed has to move before the registers are rewritten.
     static let rpmWriteTolerance = 25.0
 }
 
 enum ControlState: Equatable {
     case automatic
     case holding(rpm: Double)
-
-    var isHolding: Bool { if case .holding = self { return true }; return false }
-    var rpm: Double? { if case .holding(let rpm) = self { return rpm }; return nil }
 }
 
 struct Decision {
@@ -487,53 +494,35 @@ struct Decision {
 
 /// The whole control law, with no I/O, so `selfcheck` can exercise it on a
 /// machine with no fan and CI can run it without hardware.
-func decide(policy: Policy, celsius: Double?, fan: Fan, previous: ControlState) -> Decision {
-    guard policy.enabled else {
-        return Decision(state: .automatic, reason: "policy is disabled")
+///
+/// There is no temperature in it and nothing to damp between two states: the
+/// answer is the switch and a number.
+func decide(policy: Policy, fan: Fan) -> Decision {
+    guard policy.manualOn else {
+        return Decision(state: .automatic,
+                        reason: "the manual switch is off; the fans are Apple's")
     }
-    guard let celsius else {
-        // An empty group means the configuration names sensors this Mac does not
-        // have. Doing nothing visible is the only safe reading of that.
-        return Decision(state: .automatic, reason: "no sensor in group \"\(policy.group)\"")
+    let wanted = heldRpm(policy: policy, fan: fan)
+    guard wanted != policy.holdRpm else {
+        return Decision(state: .holding(rpm: wanted),
+                        reason: String(format: "manual override: holding at %.0f rpm", wanted))
     }
-    guard celsius < policy.criticalTempC else {
-        return Decision(
-            state: .automatic,
-            reason: String(format: "thermal guard: %.1f C >= %.0f C, Apple control is safer",
-                           celsius, policy.criticalTempC))
-    }
-
-    let disengageAt = policy.targetTempC - policy.hysteresisC
-    switch previous {
-    case .automatic where celsius < policy.targetTempC:
-        return Decision(
-            state: .automatic,
-            reason: String(format: "%.1f C below target %.0f C", celsius, policy.targetTempC))
-    case .automatic:
-        return Decision(state: .holding(rpm: rpm(for: celsius, policy: policy, fan: fan)),
-                        reason: String(format: "%.1f C reached target %.0f C", celsius, policy.targetTempC))
-    case .holding where celsius <= disengageAt:
-        return Decision(
-            state: .automatic,
-            reason: String(format: "%.1f C fell %.0f degrees below target", celsius, policy.hysteresisC))
-    case .holding:
-        return Decision(state: .holding(rpm: rpm(for: celsius, policy: policy, fan: fan)),
-                        reason: String(format: "holding, %.1f C", celsius))
-    }
+    // Saying so out loud is the point: a speed the console offered and the fan
+    // refused is a fact the person at the switch should see, not a silent clamp.
+    return Decision(
+        state: .holding(rpm: wanted),
+        reason: String(format: "manual override: %.0f rpm asked, fan %d only turns %.0f to %.0f",
+                       policy.holdRpm, fan.id, fan.minRpm, fan.maxRpm))
 }
 
-/// Ramps with load, then clamps into what the fan can physically do. The lower
-/// bound is the fan's own minimum, which is what makes a stale policy harmless:
-/// it cannot ask for less cooling than Apple's idle.
-func rpm(for celsius: Double, policy: Policy, fan: Fan) -> Double {
-    if celsius >= policy.criticalTempC - Policy.nearCriticalMarginC {
-        return fan.maxRpm > 0 ? fan.maxRpm : policy.holdRpm
-    }
-    let over = max(0, celsius - policy.targetTempC)
-    let wanted = policy.holdRpm + policy.rampPerDegree * over
+/// The rpm for one fan, clamped into what that fan can physically do. The lower
+/// bound is the fan's own floor, which is what makes a stale or careless request
+/// harmless: it cannot ask for less cooling than Apple's idle. An unmeasured
+/// ceiling (`maxRpm` 0 on a fan the SMC will not describe) does not invent one.
+func heldRpm(policy: Policy, fan: Fan) -> Double {
     let lower = max(fan.minRpm, 0)
-    let upper = fan.maxRpm > fan.minRpm ? fan.maxRpm : max(wanted, lower)
-    return min(max(wanted, lower), upper).rounded()
+    let upper = fan.maxRpm > lower ? fan.maxRpm : policy.holdRpm
+    return min(max(policy.holdRpm, lower), upper).rounded()
 }
 
 // --------------------------------------------------------------------- actuator
@@ -560,12 +549,30 @@ struct Actuator {
     var attempts = 4
     var betweenAttempts: UInt32 = 120_000
 
-    /// Target first, then the mode: the target is ignored while mode is 0, so
-    /// writing it before forcing means the fan jumps straight to the right speed
-    /// instead of holding whatever Apple last asked for.
+    /// Mode first, then the target. That order is the machine's, not a
+    /// preference: measured on this Mac14,7 (Darwin 27), a target written while
+    /// the fan is still in automatic control does not stick. The status read
+    /// straight after the old target-then-mode pair showed mode 1 with the target
+    /// Apple last wanted (1200 rpm), so the fan idled while the daemon believed
+    /// it was holding 3000. The same target write once mode is 1 is honored.
+    ///
+    /// A failure after the fan is forced hands it straight back: a fan left
+    /// forced at a target nobody set is worse than a hold that never started.
     func engage(fan: Int, rpm: Double) -> Result<Void, FanWriteFailure> {
         smc.resolveModeKey(fan)
-        return writeAll([("F\(fan)Tg", rpm), (smc.modeKey(fan), 1)])
+        switch writeAll([(smc.modeKey(fan), 1)]) {
+        case .failure(let error):
+            return .failure(error)
+        case .success:
+            break
+        }
+        switch writeAll([("F\(fan)Tg", rpm)]) {
+        case .success:
+            return .success(())
+        case .failure(let error):
+            _ = writeAll([("F\(fan)Tg", 0), (smc.modeKey(fan), 0)])
+            return .failure(error)
+        }
     }
 
     func release(fan: Int) -> Result<Void, FanWriteFailure> {
@@ -573,8 +580,8 @@ struct Actuator {
         return writeAll([("F\(fan)Tg", 0), (smc.modeKey(fan), 0)])
     }
 
-    /// Retries the whole pair as one unit: half a write landing would leave the
-    /// fan forced at a stale target, which is worse than a clean failure.
+    /// Retries the whole sequence as one unit: half a write landing would leave
+    /// the fan forced at a stale target, which is worse than a clean failure.
     private func writeAll(_ writes: [(key: String, value: Double)]) -> Result<Void, FanWriteFailure> {
         var last: FanWriteFailure?
         for attempt in 1...attempts {
@@ -731,14 +738,18 @@ func runKeys(prefix: String, json: Bool) -> Int32 {
     return 0
 }
 
-/// The decision table. `flutter test` runs this, so the control law is covered
-/// without a machine that has a fan.
+/// The decision table. `flutter test` runs this, so the hold is covered without
+/// a machine that has a fan.
 func runSelfCheck(json: Bool) -> Int32 {
     var failures: [String] = []
     var checks = 0
     let fan = Fan(id: 0, name: "Fan 0", actualRpm: 1_200, minRpm: 1_199, maxRpm: 7_199,
                   targetRpm: 1_200, mode: 0, modeKey: "F0Md")
-    let policy = Policy()
+    // A second fan with a different range: the hold is per fan, and one fixture
+    // where every number fits proves nothing about the clamp.
+    let smallFan = Fan(id: 1, name: "Fan 1", actualRpm: 900, minRpm: 2_000, maxRpm: 4_000,
+                       targetRpm: 900, mode: 0, modeKey: "F1Md")
+    let manual = Policy(manualOn: true)
 
     func check(_ label: String, _ got: Decision, _ want: ControlState) {
         checks += 1
@@ -747,37 +758,31 @@ func runSelfCheck(json: Bool) -> Int32 {
         }
     }
 
-    check("disabled", decide(policy: Policy(enabled: false), celsius: 99, fan: fan, previous: .automatic), .automatic)
-    check("no sensor", decide(policy: policy, celsius: nil, fan: fan, previous: .automatic), .automatic)
-    check("below target, idle", decide(policy: policy, celsius: 60, fan: fan, previous: .automatic), .automatic)
-    check("at target, engage", decide(policy: policy, celsius: 70, fan: fan, previous: .automatic),
-          .holding(rpm: policy.holdRpm))
-    check("above target, ramp", decide(policy: policy, celsius: 74, fan: fan, previous: .automatic),
-          .holding(rpm: policy.holdRpm + policy.rampPerDegree * 4))
-    check("hysteresis band, still holding", decide(policy: policy, celsius: 68.5, fan: fan,
-          previous: .holding(rpm: 3_000)), .holding(rpm: policy.holdRpm))
-    check("past hysteresis, release", decide(policy: policy, celsius: 66.9, fan: fan,
-          previous: .holding(rpm: 3_000)), .automatic)
-    check("thermal guard", decide(policy: policy, celsius: 95, fan: fan,
-          previous: .holding(rpm: 3_000)), .automatic)
-    check("near critical, full tilt", decide(policy: policy, celsius: 90.5, fan: fan,
-          previous: .holding(rpm: 3_000)), .holding(rpm: fan.maxRpm))
-    check("clamped to fan maximum", decide(policy: Policy(targetTempC: 30, holdRpm: 90_000),
-          celsius: 60, fan: fan, previous: .automatic), .holding(rpm: fan.maxRpm))
-    check("never below the idle floor", decide(policy: Policy(targetTempC: 30, holdRpm: 200, rampPerDegree: 0),
-          celsius: 60, fan: fan, previous: .automatic), .holding(rpm: fan.minRpm))
-    check("overshoot cannot go backwards", decide(policy: policy, celsius: 85, fan: fan,
-          previous: .holding(rpm: rpm(for: 85, policy: policy, fan: fan))),
-          .holding(rpm: policy.holdRpm + policy.rampPerDegree * 15))
-    // The exact boundary: releasing at `target - hysteresis` and not a tenth
-    // before it is what the two branches above are about.
-    check("hysteresis boundary, release", decide(policy: policy, celsius: 67, fan: fan,
-          previous: .holding(rpm: 2_400)), .automatic)
+    check("switch off, hands the fans back", decide(policy: Policy(), fan: fan), .automatic)
+    check("switch on, holds", decide(policy: manual, fan: fan), .holding(rpm: manual.holdRpm))
+    // A second fan whose range sits elsewhere: the hold is judged per fan, so a
+    // speed that fits is asked for exactly and needs no clamping.
+    check("a second fan is judged on its own range",
+          decide(policy: manual, fan: smallFan), .holding(rpm: manual.holdRpm))
+    check("clamped to the fan's ceiling",
+          decide(policy: Policy(manualOn: true, holdRpm: 90_000), fan: fan),
+          .holding(rpm: fan.maxRpm))
+    check("never below the fan's own idle floor",
+          decide(policy: Policy(manualOn: true, holdRpm: 200), fan: fan),
+          .holding(rpm: fan.minRpm))
+    check("the floor is this fan's, not the first fan's",
+          decide(policy: Policy(manualOn: true, holdRpm: 200), fan: smallFan),
+          .holding(rpm: smallFan.minRpm))
+    check("an unmeasured ceiling does not invent one",
+          decide(policy: Policy(manualOn: true, holdRpm: 5_000),
+                 fan: Fan(id: 2, name: "Fan 2", actualRpm: 0, minRpm: 0, maxRpm: 0,
+                          targetRpm: nil, mode: 0, modeKey: "F2Md")),
+          .holding(rpm: 5_000))
 
     if json {
         emitJSON(SelfCheckResult(checks: checks, failures: failures))
     } else if failures.isEmpty {
-        print("selfcheck: \(checks) policy cases passed")
+        print("selfcheck: \(checks) manual hold cases passed")
     } else {
         for failure in failures { print("FAIL \(failure)") }
     }
@@ -794,6 +799,12 @@ struct SelfCheckResult: Codable {
 
 let defaultSocketPath = "/var/run/toolshed-fand.sock"
 let defaultLogPath = "/Library/Logs/toolshed-fand.log"
+
+/// How often the daemon re-checks its own hold. Deliberately not a policy field:
+/// with no temperature to react to, the tick has two jobs — expire the lease and
+/// notice that thermalmonitord took a fan back — and both are served by a couple
+/// of seconds rather than a number anyone configures.
+let controlTickSeconds = 2
 
 /// Either end can override these through the environment or the command line,
 /// which is how the tests and a developer instance reach a daemon without root
@@ -836,7 +847,6 @@ struct Reply: Codable {
         var leaseExpiresAt: Int?
         var startedAt: Int
         var ticks: Int
-        var celsius: Double?
     }
 }
 
@@ -860,73 +870,92 @@ final class Controller {
     private let lock = NSLock()
     let smc: SmcClient
     private var policy: Policy?
-    private var state: ControlState = .automatic
 
-    /// Which fan we last wrote to. Without this, a policy that has just been
-    /// cleared would leave the fan forced, because there would be no way to know
-    /// which fan to hand back.
-    private var heldFan: Int?
+    /// What each fan we hold was last asked for, in rpm. The keys are the answer
+    /// to "which fans are ours": a fan missing here was never forced by this
+    /// daemon, so handing it back would take it out from under smcFanControl.
+    /// Without it a cleared policy would leave the fans forced forever, because
+    /// there would be no way to know which ones to release.
+    private var held: [Int: Double] = [:]
     private var lastError: String?
     private var lastReason = "no policy has been sent"
     private var lastRenew = Date()
     private let startedAt = Date()
     private var ticks = 0
-    private var lastCelsius: Double?
 
     /// Set by the signal handler so a second signal cannot re-enter the release.
     var shuttingDown = false
 
     init(smc: SmcClient) { self.smc = smc }
 
-    var intervalSeconds: Int { max(1, policy?.intervalSeconds ?? 3) }
-
     func tick() {
         lock.lock()
         defer { lock.unlock() }
         guard let policy else {
-            if let fanId = heldFan { release(fanId: fanId, reason: lastReason) }
+            for fanId in held.keys.sorted() { release(fanId: fanId, reason: lastReason) }
             return
         }
         ticks += 1
 
         if policy.leaseSeconds > 0, Date().timeIntervalSince(lastRenew) > Double(policy.leaseSeconds) {
+            let reason = String(format: "lease of %ds expired without a renewal from the app",
+                                policy.leaseSeconds)
             self.policy = nil
-            release(fanId: policy.fan, reason: String(format: "lease of %ds expired without a renewal from the app", policy.leaseSeconds))
+            for fanId in held.keys.sorted() { release(fanId: fanId, reason: reason) }
+            lastReason = reason
             return
         }
 
-        let sensors = smc.temperatureSensors()
-        let celsius = selectedTemperature(sensors, group: policy.group)
-        lastCelsius = celsius
-        guard let fan = smc.fan(policy.fan) else {
-            reportFailure("fan \(policy.fan) is not readable")
+        let count = smc.fanCount
+        guard count > 0 else {
+            reportFailure("this Mac reports no fans, so there is nothing to hold")
             return
         }
-
-        let decision = decide(policy: policy, celsius: celsius, fan: fan, previous: state)
-        lastReason = decision.reason
-        switch decision.state {
-        case .automatic:
-            if let fanId = heldFan { release(fanId: fanId, reason: decision.reason) }
-        case .holding(let wanted):
-            // Only rewrite the registers when the number actually moved, or when
-            // something else has taken the fan out of our hands.
-            let drifted = fan.mode == 0
-            let changed = state.rpm.map { abs($0 - wanted) >= Policy.rpmWriteTolerance } ?? true
-            if changed || drifted {
-                switch Actuator(smc: smc).engage(fan: policy.fan, rpm: wanted) {
+        var reasons: [String] = []
+        // Every fan is judged on its own: the same request lands differently on a
+        // fan with a different range, and a hold that stops at fan 0 because fan 1
+        // refused is a fan still pinned at an old number.
+        for fanId in 0..<count {
+            guard let fan = smc.fan(fanId) else {
+                reportFailure("fan \(fanId) is not readable")
+                continue
+            }
+            let decision = decide(policy: policy, fan: fan)
+            reasons.append(decision.reason)
+            switch decision.state {
+            case .automatic:
+                if held[fanId] != nil { release(fanId: fanId, reason: decision.reason) }
+            case .holding(let wanted):
+                // Rewrite when the number moved, when something else took the
+                // fan out of our hands, or when the target it reports is not
+                // the one we wrote. The last case is the one that matters after
+                // a mode change: the SMC applies the two writes asynchronously,
+                // so a target can land while the fan is still automatic and be
+                // discarded. Trusting our own bookkeeping then pins the fan at
+                // Apple's old number while the daemon reports a hold. Reading
+                // the target back costs nothing and lets the next tick correct
+                // it.
+                let drifted = fan.mode == 0
+                let changed = held[fanId].map { abs($0 - wanted) >= Policy.rpmWriteTolerance } ?? true
+                let targetLost = fan.targetRpm.map { abs($0 - wanted) >= Policy.rpmWriteTolerance } ?? false
+                guard changed || drifted || targetLost else { continue }
+                switch Actuator(smc: smc).engage(fan: fanId, rpm: wanted) {
                 case .success:
-                    state = .holding(rpm: wanted)
-                    heldFan = policy.fan
+                    held[fanId] = wanted
                     lastError = nil
                     log(String(format: "engaged fan %d at %.0f rpm — %@ (was %.0f, mode %d)",
-                               policy.fan, wanted, decision.reason, fan.actualRpm, fan.mode))
+                               fanId, wanted, decision.reason, fan.actualRpm, fan.mode))
                 case .failure(let error):
                     // A refused write must not leave us claiming we are holding.
-                    state = .automatic
-                    reportFailure("write failed: \(error)")
+                    held[fanId] = nil
+                    reportFailure("write failed on fan \(fanId): \(error)")
                 }
             }
+        }
+        // One line for the app. A fan whose request had to be clamped is the
+        // sentence worth reading; identical reasons are not worth repeating.
+        if let notable = reasons.first(where: { $0.contains("only turns") }) ?? reasons.first {
+            lastReason = notable
         }
     }
 
@@ -941,13 +970,13 @@ final class Controller {
     private func release(fanId: Int, reason: String) {
         switch Actuator(smc: smc).release(fan: fanId) {
         case .success:
-            state = .automatic
-            heldFan = nil
+            held[fanId] = nil
             lastError = nil
             log("fan \(fanId) returned to automatic control — \(reason)")
         case .failure(let error):
-            // heldFan stays set, so the next tick tries again: a fan left forced
-            // by a release that failed once is the outcome that must not persist.
+            // The fan stays in `held`, so the next tick tries again: a fan left
+            // forced by a release that failed once is the outcome that must not
+            // persist.
             reportFailure("could not return fan \(fanId) to automatic: \(error)")
         }
     }
@@ -977,23 +1006,26 @@ final class Controller {
     func apply(_ incoming: Policy) -> String? {
         lock.lock()
         defer { lock.unlock() }
-        guard incoming.fan < smc.fanCount else {
-            return "this Mac reports \(smc.fanCount) fan(s), so fan \(incoming.fan) does not exist"
+        // The request names no fan — it holds every one — so the only refusal
+        // left is a machine with nothing to spin.
+        guard smc.fanCount > 0 else {
+            return "this Mac reports no fans the SMC will name, so there is nothing to hold"
         }
         policy = incoming
         lastRenew = Date()
         return nil
     }
 
-    /// Releases the fan immediately rather than on the next tick: a pressed
-    /// button should not wait for the interval to elapse before the fan is free.
+    /// Releases every held fan immediately rather than on the next tick: a
+    /// pressed button should not wait for the interval to elapse before the fans
+    /// are free.
     func clear() {
         lock.lock()
-        let fanId = heldFan
+        let fanIds = held.keys.sorted()
         policy = nil
         lastReason = "control was released"
         lock.unlock()
-        if let fanId { release(fanId: fanId, reason: "control was released") }
+        for fanId in fanIds { release(fanId: fanId, reason: "control was released") }
     }
 
     func status() -> Reply.Status {
@@ -1008,20 +1040,25 @@ final class Controller {
             expires = nil
         }
         let applied: String
-        switch state {
-        case .automatic: applied = policy == nil ? "not configured" : "automatic"
-        case .holding: applied = "holding"
+        if !held.isEmpty {
+            applied = "holding"
+        } else {
+            applied = policy == nil ? "not configured" : "automatic"
         }
         return Reply.Status(
             pid: Int(getpid()), uid: Int(getuid()), isRoot: geteuid() == 0, fans: fans,
-            applied: applied, appliedRpm: state.rpm, reason: lastReason,
+            applied: applied,
+            // One number for the whole hold. Where two fans have different ranges
+            // the request clamps differently on each, and the highest is the one
+            // worth quoting — `reason` says so when a fan was clamped at all.
+            appliedRpm: held.values.max(), reason: lastReason,
             lastError: lastError, policy: policy, leaseExpiresAt: expires,
-            startedAt: Int(startedAt.timeIntervalSince1970), ticks: ticks, celsius: lastCelsius)
+            startedAt: Int(startedAt.timeIntervalSince1970), ticks: ticks)
     }
 
     /// From the signal handler: put the hardware back before the process dies.
     ///
-    /// Only a fan this daemon actually forced is touched. Writing fan 0's mode
+    /// Only a fan this daemon actually forced is touched. Writing every fan's mode
     /// key on every exit — the obvious defensive reading of "whatever we believe
     /// its state is" — would hand a fan back to Apple out from under
     /// smcFanControl or Macs Fan Control, which may be holding it legitimately
@@ -1030,12 +1067,13 @@ final class Controller {
     /// forced fan genuinely has nobody maintaining it.
     func shutdownNow() {
         lock.lock()
-        let fanId = heldFan
+        let fanIds = held.keys.sorted()
         lock.unlock()
-        guard let fanId else { return }
-        switch Actuator(smc: smc).release(fan: fanId) {
-        case .success: log("fan \(fanId) returned to automatic control before exit")
-        case .failure(let error): log("exited without releasing fan \(fanId): \(error)")
+        for fanId in fanIds {
+            switch Actuator(smc: smc).release(fan: fanId) {
+            case .success: log("fan \(fanId) returned to automatic control before exit")
+            case .failure(let error): log("exited without releasing fan \(fanId): \(error)")
+            }
         }
     }
 }
@@ -1234,7 +1272,7 @@ func usage() -> String {
       telemetry [--json] [--every N]     read temperatures and fans as the user
       selftest  [--json]                 report whether this process may write
       keys [--prefix T] [--json]         enumerate SMC keys
-      selfcheck [--json]                 run the policy decision table
+      selfcheck [--json]                 run the manual hold decision table
       serve                              run the root daemon (LaunchDaemon)
       client  <request-json>             one round trip to the daemon's socket
 
@@ -1281,13 +1319,9 @@ case "serve":
     controller.releaseAllFans()
     serve(controller)
     let loop = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
-    // The interval is the policy's, so the source re-arms itself after every
-    // tick rather than keeping a stale one from before the app connected.
-    loop.setEventHandler {
-        controller.tick()
-        loop.schedule(deadline: .now() + .seconds(controller.intervalSeconds))
-    }
-    loop.schedule(deadline: .now() + .seconds(controller.intervalSeconds))
+    loop.setEventHandler { controller.tick() }
+    loop.schedule(deadline: .now() + .seconds(controlTickSeconds),
+                  repeating: .seconds(controlTickSeconds))
     loop.resume()
 
     for signalNumber in [SIGTERM, SIGINT, SIGHUP] {

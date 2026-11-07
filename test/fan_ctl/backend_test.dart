@@ -38,76 +38,67 @@ void main() {
   Future<void> pastRenewal() =>
       Future<void>.delayed(const Duration(milliseconds: 1400));
 
+  const held = FanPolicy(manualOn: true, holdRpm: 3400, leaseSeconds: 2);
+
   group('engage', () {
     test('sends the policy once and saves it', () async {
       final daemon = FakeDaemon();
-      final policy = FanPolicy.defaults.copyWith(
-        enabled: true,
-        targetTempC: 64,
-        leaseSeconds: 2,
-      );
-      await backend(daemon).engage(policy);
+      await backend(daemon).engage(held);
 
       expect(daemon.cmds, ['apply']);
-      expect(daemon.applied.single, policy);
+      expect(daemon.applied.single, held);
       expect(
         FanPolicy.fromJson(
           Map<String, Object?>.from(
             jsonDecode(policyFile().readAsStringSync()) as Map,
           ),
         ),
-        policy,
+        held,
+      );
+    });
+
+    test('renews the lease with the speed it was last engaged with', () async {
+      final daemon = FakeDaemon();
+      final service = backend(daemon);
+      final second = held.copyWith(holdRpm: 2800);
+
+      await service.engage(held);
+      await pastRenewal();
+      expect(daemon.applied.length, greaterThan(1));
+
+      // The regression this pins: a second engage used to leave the first
+      // timer running, so the superseded speed was re-applied seconds after
+      // the new one was set.
+      await service.engage(second);
+      daemon.received.clear();
+      await pastRenewal();
+      expect(daemon.applied, isNotEmpty);
+      expect(
+        daemon.applied.every((p) => p.holdRpm == 2800),
+        isTrue,
+        reason: 'a stale renewal timer re-applied the superseded policy',
       );
     });
 
     test(
-      'renews the lease with the numbers it was last engaged with',
+      'refuses a policy the switch has not turned on, without writing',
       () async {
         final daemon = FakeDaemon();
-        final service = backend(daemon);
-        final first = FanPolicy.defaults.copyWith(
-          enabled: true,
-          targetTempC: 64,
-          leaseSeconds: 2,
+        await expectLater(
+          backend(daemon).engage(FanPolicy.defaults),
+          throwsA(
+            isA<ToolException>().having((e) => e.code, 'code', 'NOT_A_HOLD'),
+          ),
         );
-        final second = first.copyWith(targetTempC: 58);
-
-        await service.engage(first);
-        await pastRenewal();
-        expect(daemon.applied.length, greaterThan(1));
-
-        // The regression this pins: a second engage used to leave the first
-        // timer running, so the fan was handed back the old threshold seconds
-        // after the new one was set.
-        await service.engage(second);
-        daemon.received.clear();
-        await pastRenewal();
-        expect(daemon.applied, isNotEmpty);
-        expect(
-          daemon.applied.every((p) => p.targetTempC == 58),
-          isTrue,
-          reason: 'a stale renewal timer re-applied the superseded policy',
-        );
+        expect(daemon.received, isEmpty);
+        expect(policyFile().existsSync(), isFalse);
       },
     );
 
-    test('refuses a policy that is switched off, without writing', () async {
-      final daemon = FakeDaemon();
-      await expectLater(
-        backend(daemon).engage(FanPolicy.defaults.copyWith(enabled: false)),
-        throwsA(
-          isA<ToolException>().having((e) => e.code, 'code', 'POLICY_DISABLED'),
-        ),
-      );
-      expect(daemon.received, isEmpty);
-      expect(policyFile().existsSync(), isFalse);
-    });
-
     test('refuses a broken policy before the daemon sees it', () async {
       final daemon = FakeDaemon();
-      final broken = FanPolicy.defaults.copyWith(targetTempC: 130, fan: 9);
       await expectLater(
-        backend(daemon).engage(broken),
+        backend(daemon).engage(held.copyWith(holdRpm: 200)),
         throwsA(
           isA<ToolException>().having((e) => e.code, 'code', 'INVALID_POLICY'),
         ),
@@ -115,12 +106,32 @@ void main() {
       expect(daemon.received, isEmpty);
     });
 
+    test(
+      'a daemon that does not understand this app is named, not obeyed',
+      () async {
+        // The one version-skew outcome that would be silent: an old installed
+        // helper rejecting the three-key request. A wrong speed nobody mentions
+        // is worse than a refusal with a next step.
+        final daemon = FakeDaemon(
+          refuses: 'that is not a toolshed-fand request',
+        );
+        await expectLater(
+          backend(daemon).engage(held),
+          throwsA(
+            isA<ToolException>().having(
+              (e) => e.code,
+              'code',
+              'DAEMON_TOO_OLD',
+            ),
+          ),
+        );
+      },
+    );
+
     test('a daemon that does not answer leaves nothing renewing', () async {
       final daemon = FakeDaemon(answers: false);
       await expectLater(
-        backend(
-          daemon,
-        ).engage(FanPolicy.defaults.copyWith(enabled: true, leaseSeconds: 2)),
+        backend(daemon).engage(held),
         throwsA(
           isA<ToolException>().having((e) => e.code, 'code', 'DAEMON_SILENT'),
         ),
@@ -133,47 +144,36 @@ void main() {
   group('save without engaging', () {
     test('writes the file and touches no hardware at all', () async {
       final daemon = FakeDaemon();
-      final policy = FanPolicy.defaults.copyWith(
-        enabled: true,
-        targetTempC: 64,
-      );
 
-      await backend(daemon).writeConfig(policy);
+      await backend(daemon).writeConfig(held);
 
-      // The button says "without engaging". An enabled policy used to be sent
-      // to the daemon here, which made Engage and Save the same action and let
-      // a save be undone by the previous hold's renewal.
+      // Dragging the slider saves the draft. If a save also sent it, moving the
+      // number would spin the fan through the daemon mid-gesture and the previous
+      // hold's renewal would be undone by it.
       expect(daemon.received, isEmpty);
       expect(
         Map<String, Object?>.from(
           jsonDecode(policyFile().readAsStringSync()) as Map,
-        )['targetTempC'],
-        64.0,
+        )['holdRpm'],
+        3400.0,
       );
     });
 
     test('leaves an existing hold exactly as it was', () async {
       final daemon = FakeDaemon();
       final service = backend(daemon);
-      final holding = FanPolicy.defaults.copyWith(
-        enabled: true,
-        targetTempC: 64,
-        leaseSeconds: 2,
-      );
-      await service.engage(holding);
-      await service.writeConfig(holding.copyWith(targetTempC: 58));
+      await service.engage(held);
+      await service.writeConfig(held.copyWith(holdRpm: 2800));
       daemon.received.clear();
       await pastRenewal();
 
-      expect(daemon.applied.every((p) => p.targetTempC == 64), isTrue);
+      expect(daemon.applied.every((p) => p.holdRpm == 3400), isTrue);
     });
 
     test('refuses a broken policy without saving it', () async {
       final daemon = FakeDaemon();
       await expectLater(
-        backend(
-          daemon,
-        ).writeConfig(FanPolicy.defaults.copyWith(hysteresisC: 40)),
+        backend(daemon).writeConfig(held.copyWith(leaseSeconds: 90000)),
         throwsA(
           isA<ToolException>().having((e) => e.code, 'code', 'INVALID_POLICY'),
         ),
@@ -188,9 +188,7 @@ void main() {
       () async {
         final daemon = FakeDaemon();
         final service = backend(daemon);
-        await service.engage(
-          FanPolicy.defaults.copyWith(enabled: true, leaseSeconds: 2),
-        );
+        await service.engage(held);
 
         await service.releaseControl();
 
@@ -205,7 +203,7 @@ void main() {
         final saved = Map<String, Object?>.from(
           jsonDecode(policyFile().readAsStringSync()) as Map,
         );
-        expect(saved['enabled'], isFalse);
+        expect(saved['manualOn'], isFalse);
       },
     );
 
@@ -229,13 +227,9 @@ void main() {
       () async {
         final daemon = FakeDaemon();
         final service = backend(daemon);
-        final live = FanPolicy.defaults.copyWith(
-          enabled: true,
-          targetTempC: 64,
-          leaseSeconds: 0,
-        );
+        final live = held.copyWith(leaseSeconds: 0);
         await service.engage(live);
-        await service.writeConfig(live.copyWith(targetTempC: 58));
+        await service.writeConfig(live.copyWith(holdRpm: 2800));
 
         expect(await service.readConfig(), live);
       },
@@ -244,28 +238,23 @@ void main() {
     test('shows the file again once the hold is released', () async {
       final daemon = FakeDaemon();
       final service = backend(daemon);
-      final live = FanPolicy.defaults.copyWith(
-        enabled: true,
-        targetTempC: 64,
-        leaseSeconds: 0,
-      );
+      final live = held.copyWith(leaseSeconds: 0);
       await service.engage(live);
-      await service.writeConfig(live.copyWith(targetTempC: 58));
+      await service.writeConfig(live.copyWith(holdRpm: 2800));
       expect(await service.readConfig(), live);
 
       await service.releaseControl();
       expect(
         await service.readConfig(),
-        live.copyWith(targetTempC: 58, enabled: false),
+        live.copyWith(holdRpm: 2800, manualOn: false),
       );
     });
 
     test('falls back to the file when nothing is answering', () async {
       final daemon = FakeDaemon(answers: false);
-      final saved = FanPolicy.defaults.copyWith(targetTempC: 61);
-      await policyFile().writeAsString(jsonEncode(saved.toJson()));
+      await policyFile().writeAsString(jsonEncode(held.toJson()));
 
-      expect(await backend(daemon).readConfig(), saved);
+      expect(await backend(daemon).readConfig(), held);
     });
   });
 }

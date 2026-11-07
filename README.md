@@ -127,21 +127,24 @@ lines for one port, so the link is collapsed to one. A port that is exposed but
 never published (`8080/tcp`) is shown greyed and inert, because nothing on the
 host can reach it.
 
-### fan_ctl — temperature-triggered fan control (macOS)
+### fan_ctl — hold a fan at a speed you set (macOS)
 
-Set a temperature; below it the fan stays in Apple's own control, at or above it
-the daemon takes over and holds the speed the policy asks for.
+One switch and one number: `Fan manual ON` asks every fan the SMC reports for one
+speed, and flipping it off hands them back. Nothing else.
+
+Cooling on temperature is deliberately not here. `thermalmonitord` has the
+sensor fleet, the load history and the curves for this exact machine, and a
+threshold typed into a console is a worse second implementation of that rather
+than a supplement to it. So the whole law, in `macos/fanctl/main.swift`:
 
 ```
-below target ....... Apple's automatic curve, registers untouched
-at target .......... hold at N rpm
-each degree over ... + M rpm, clamped to the fan's own floor and ceiling
-above guard ........ handed back to Apple, whose curve is steeper than any
-                     setting here
+manualOn ....... hold every fan at policy.holdRpm, clamped into its own range
+otherwise ...... automatic — the fans are Apple's
 ```
 
-Hysteresis is not optional: a machine sitting exactly on the threshold would
-otherwise flip control twice a second.
+What the tool will not do is answer the machine's heat with its own opinion
+about heat. It answers a request for rpm, and the clamp means it can never ask
+for less cooling than Apple's own idle.
 
 **Why there is a daemon.** Reading the System Management Controller needs no
 privilege, and `toolshed-fand telemetry` proves it — fans, their ranges, and
@@ -155,9 +158,9 @@ holding a password prompt open.
 - The socket is world-reachable by design — a GUI user has to be able to reach
   it — and every connection is gated on the peer's uid: root, or the owner of
   `/dev/console`. Nothing else gets an answer.
-- A policy has a **lease**. It survives only while the app renews it, so a crash
-  or a quit cannot leave a fan forced; a lease of zero means hold until released,
-  and is a choice in the UI rather than a default.
+- A hold has a **lease**. It survives only while the app renews it, so a crash
+  or a quit cannot leave a fan forced. Now that no temperature can end a hold,
+  the lease is the only thing that hands the fans back by itself.
 - A daemon that starts and finds a fan already forced hands it back to Apple
   before it serves anything, including after a crash respawn.
 - `SIGTERM` releases the fan before the process exits, and `Stop` is a
@@ -170,13 +173,17 @@ The decision law lives in `macos/fanctl/main.swift` and nowhere in Dart. The UI
 shows the rpm the daemon says it applied, never a number it predicted, because
 only one of the two is allowed to be wrong.
 
-**Take control** is the only button that writes hardware. `Save only` writes the
-policy file and sends nothing, and the renewal timer re-applies the policy the
-last `Take control` named rather than one it captured — so a save cannot be
-undone seconds later by a superseded hold. Every control action answers with a
-toast carrying the daemon's own verdict, each button carries the sentence that
-explains what it is for, and a disabled one says why beside itself, because a
-silent no-op on a fan console is indistinguishable from a broken one.
+**The switch is the only control.** Flipping it on sends one `apply`; flipping it
+off sends `clear`. The slider moves the number on screen while it is dragged and
+decides at the end: while a hold is live it re-`apply`s, and while it is not the
+value is only written to the policy file, so no fan moves behind a switch that is
+off. A slider that *did* write on every pixel would be a fan stepping through
+every division of its track — and the daemon rewrites the registers only once the
+commanded value moves by more than 25 rpm (`Policy.rpmWriteTolerance`, mirrored
+by `_HoldCard._writeToleranceRpm` in the console), which is the anti-churn rule
+that used to belong to the hysteresis band. Every control action answers with a
+toast carrying the daemon's own verdict, because a silent no-op on a fan console
+is indistinguishable from a broken one.
 
 ### app_lock — close the apps you named, until you type a passphrase (macOS)
 
@@ -354,7 +361,7 @@ lib/
       docker_backend.dart     finds the docker CLI, sends it commands, reports back
       docker_screen.dart      the console
     fan_ctl/                ditto, for the fan:
-      fan_policy.dart         the threshold, the ramp, the lease
+      fan_policy.dart         the switch, the speed, the lease
       fan_telemetry.dart      fans, sensors and the group maxima
       fan_daemon.dart         what the root process says it is doing
       daemon_client.dart      one newline-JSON request per connection
@@ -421,13 +428,15 @@ catch the failure modes this design actually has:
   against the machine it is on. It never runs `selftest`, which writes a
   register.
 - `fan_ctl/backend_test` replaces the daemon with the list of requests it was
-  sent, which is the only honest seam: it pins that `Save only` sends nothing,
-  that a second `Take control` renews with the new numbers instead of racing the
-  old timer, and that a release stops renewing.
+  sent, which is the only honest seam: it pins that saving a draft sends nothing,
+  that a second `apply` renews with the new speed instead of racing the old
+  timer, that a release stops renewing, and that an old helper which cannot read
+  the three-key request is reported as a daemon to update rather than obeyed.
 - `fan_ctl/console_test` drives the real widget over that same fake, so the
-  buttons are tested against the capabilities they are drawn from: the info
-  badges open one note at a time, the bar does not overflow a narrow window, and
-  `Save only` still sends nothing when a finger, rather than a test, presses it.
+  controls are tested against the capabilities they are drawn from: the switch
+  issues one `apply` and never a second verb, the slider is bounded by the rpm
+  the helper reports, no temperature crosses into the tree, and the bar does not
+  overflow a narrow window.
 
 The lock tests are the same shape, because the lock has the same failure modes:
 

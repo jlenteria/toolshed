@@ -28,6 +28,19 @@ void main() {
       );
     });
 
+    test('Policy reads a request that omits keys instead of refusing it', () {
+      // A synthesized Codable decoder throws keyNotFound for an absent key no
+      // matter what the property defaults to, so the hand-written initializer
+      // is what keeps a leaner or hand-run request working. It is three keys,
+      // and three optional reads are the whole of it.
+      expect(
+        RegExp(r'init\(from decoder: Decoder\) throws').hasMatch(swift),
+        isTrue,
+        reason: 'Policy must declare its own decoder',
+      );
+      expect(RegExp(r'decodeIfPresent').allMatches(swift).length, 3);
+    });
+
     test('Request is the envelope the client builds', () {
       expect(swiftFields(swift, 'Request'), {'cmd', 'policy'});
       expect((jsonDecode(FanDaemonClient.requestJson('status')) as Map).keys, {
@@ -46,15 +59,37 @@ void main() {
       );
     });
 
-    test(
-      'every group name Dart can send is a SensorGroup the daemon knows',
-      () {
-        expect(
-          swiftSensorGroups(swift),
-          FanSensorGroup.values.map((group) => group.wireName).toSet(),
-        );
-      },
-    );
+    test('every group name Dart reads is a SensorGroup the daemon knows', () {
+      expect(
+        swiftSensorGroups(swift),
+        FanSensorGroup.values.map((group) => group.wireName).toSet(),
+      );
+    });
+
+    test('engaging forces the fan before it writes the target', () {
+      // Measured on a Mac14,7 (Darwin 27): a target written while the fan is
+      // still in automatic control does not stick, so the fan stayed at Apple's
+      // ~1200 rpm while the daemon reported holding 3000. The mode has to be 1
+      // before the speed is written. The ordering cannot be observed here
+      // without root and a fan, so this is a source check like the shape checks
+      // around it.
+      final start = swift.indexOf('func engage(fan: Int, rpm: Double)');
+      expect(start, greaterThanOrEqualTo(0), reason: 'no engage in the helper');
+      final body = _braced(swift, swift.indexOf('{', start));
+      final forced = body.indexOf('(smc.modeKey(fan), 1)');
+      final target = body.indexOf('("F\\(fan)Tg", rpm)');
+      expect(forced, greaterThanOrEqualTo(0), reason: 'engage never forces');
+      expect(
+        target,
+        greaterThanOrEqualTo(0),
+        reason: 'engage never sets a speed',
+      );
+      expect(
+        forced,
+        lessThan(target),
+        reason: 'the target is written before the fan is forced, so it is lost',
+      );
+    });
 
     test('every socket command Dart sends is dispatched by the daemon', () {
       // `ping` is issued by the backend's liveness probe rather than the client,
@@ -173,14 +208,8 @@ void main() {
       'type': 'sp78',
     };
     final appliedPolicy = const FanPolicy(
-      fan: 2,
-      group: FanSensorGroup.heatSink,
-      targetTempC: 71.5,
+      manualOn: true,
       holdRpm: 3200,
-      rampPerDegree: 300,
-      hysteresisC: 4,
-      intervalSeconds: 4,
-      criticalTempC: 96,
       leaseSeconds: 90,
     );
     final status = <String, Object?>{
@@ -190,13 +219,12 @@ void main() {
       'fans': [fan],
       'applied': 'holding',
       'appliedRpm': 3350.0,
-      'reason': 'group cpu at 74.0C, 2.5C above the trigger',
+      'reason': 'manual override: holding at 3350 rpm',
       'lastError': 'write F2Tg declined once',
       'policy': appliedPolicy.toJson(),
       'leaseExpiresAt': 1700000000,
       'startedAt': 1699999000,
       'ticks': 17,
-      'celsius': 74.0,
     };
     final selftest = <String, Object?>{
       'uid': 0,
@@ -290,7 +318,7 @@ void main() {
         expect(parsed.applied, 'holding');
         expect(parsed.isHolding, isTrue);
         expect(parsed.appliedRpm, 3350);
-        expect(parsed.reason, contains('above the trigger'));
+        expect(parsed.reason, contains('manual override'));
         expect(parsed.lastError, contains('declined once'));
         expect(
           parsed.policy,
@@ -299,7 +327,6 @@ void main() {
               'every field of the policy the daemon is holding must survive',
         );
         expect(parsed.ticks, 17);
-        expect(parsed.celsius, 74.0);
         expect(
           parsed.leaseExpiresAt,
           DateTime.fromMillisecondsSinceEpoch(1700000000 * 1000),
@@ -313,14 +340,12 @@ void main() {
         ..['policy'] = null
         ..['leaseExpiresAt'] = null
         ..['lastError'] = null
-        ..['appliedRpm'] = null
-        ..['celsius'] = null;
+        ..['appliedRpm'] = null;
       final parsed = FanDaemonStatus.fromJson(bare);
       expect(parsed.policy, isNull);
       expect(parsed.leaseExpiresAt, isNull);
       expect(parsed.lastError, isNull);
       expect(parsed.appliedRpm, isNull);
-      expect(parsed.celsius, isNull);
       expect(parsed.isHolding, isFalse);
     });
 

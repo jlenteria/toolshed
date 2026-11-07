@@ -129,7 +129,7 @@ build-linux:
 	$(FLUTTER) build linux --release
 
 # The helper is one Swift file with no dependencies beyond Foundation and IOKit,
-# so it builds with swiftc alone. Its selfcheck runs the policy decision table
+# so it builds with swiftc alone. Its selfcheck replays the manual hold table
 # with no hardware, which is the soundness gate the installer insists on before
 # anything becomes a LaunchDaemon.
 fanctl:

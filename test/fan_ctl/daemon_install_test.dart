@@ -260,6 +260,14 @@ void main() {
       );
       expect(apply, startsWith('{"cmd":"apply","policy":'));
       expect(apply, contains('"leaseSeconds":30'));
+      // Three keys, and nothing else: the policy on the wire is the switch, the
+      // speed and the lease, so a stray key here is a field the daemon has no
+      // name for.
+      expect((jsonDecode(apply) as Map)['policy'], {
+        'manualOn': false,
+        'holdRpm': 2400.0,
+        'leaseSeconds': 30,
+      });
     });
 
     test('names a socket only when it is not the default', () {

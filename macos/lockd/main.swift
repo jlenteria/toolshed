@@ -811,64 +811,88 @@ private func quit(_ application: NSRunningApplication, force: Bool) -> DispatchW
 /// The passphrase dialog. `watch` uses it, and the console offers it as a test so
 /// nobody has to wait for a lock event to find out whether the agent can show a
 /// window at all.
+///
+/// A wrong phrase does not dismiss it: a fresh dialog opens with "that is not
+/// the passphrase" so one typo does not cost a trip back through the app to the
+/// unlock button. It still ends on "Leave it closed" or on the timeout, so the
+/// box always offers a way out and an unattended Mac is not held behind it.
+/// Each attempt is a new NSAlert because a dismissed one cannot be trusted to
+/// run a second modal session, and each attempt arms a timer for the time left
+/// on the deadline and invalidates it when answered, so a spent timer cannot
+/// kill the next dialog early.
 func promptForUnlock(bundleId: String, name: String, store: Layout, timeoutSeconds: Int?) -> Bool {
     let application = NSApplication.shared
     application.setActivationPolicy(.accessory)
     application.activate(ignoringOtherApps: true)
-
-    let alert = NSAlert()
-    alert.messageText = "\(name) is locked"
-    alert.informativeText = "Enter the toolshed passphrase to open it. Nothing else about your setup changes."
-    alert.alertStyle = .warning
 
     // The dialog is about one app, so it wears that app's icon. A generic
     // warning glyph reads as a system alert about the Mac rather than as the
     // gate that app is standing behind.
     let appPath = loadJSON(LockConfig.self, from: store.config)?.entry(bundleId)?.path
         ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId)?.path
-    if let appPath = appPath, !appPath.isEmpty {
-        alert.icon = NSWorkspace.shared.icon(forFile: appPath)
-    }
-
-    let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
-    field.placeholderString = "passphrase"
-    alert.accessoryView = field
-    alert.addButton(withTitle: "Open")
-    alert.addButton(withTitle: "Leave it closed")
-
-    // The dismissal has to survive the modal run loop. `runModal()` runs in
-    // `NSModalPanelRunLoopMode`, so a plain `DispatchQueue.main.asyncAfter` block
-    // is not picked up until somebody clicks — which is the opposite of a
-    // timeout. Registering the timer for every mode the panel can be in is what
-    // makes an unattended prompt actually expire.
-    var timedOut = false
-    if let seconds = timeoutSeconds, seconds > 0 {
-        let timer = Timer(timeInterval: TimeInterval(seconds), repeats: false) { _ in
-            timedOut = true
-            alert.window.orderOut(nil)
-            NSApp.stopModal()
-        }
-        for mode in [RunLoop.Mode.default, .modalPanel, .eventTracking, .common] {
-            RunLoop.main.add(timer, forMode: mode)
-        }
-    }
-    field.stringValue = ""
-    let response = alert.runModal()
-    if timedOut { logLine("\(bundleId): the passphrase prompt was left unanswered") }
-    guard response == .alertFirstButtonReturn else { return false }
-
-    let typed = field.stringValue
-    guard let secret = loadJSON(StoredSecret.self, from: store.secret), matches(typed, secret) else {
-        return false
-    }
     let minutes = loadJSON(LockConfig.self, from: store.config)?.unlockMinutes ?? 5
-    var state = loadJSON(AgentState.self, from: store.state) ?? AgentState(updatedAt: 0)
-    let now = Date()
-    state.allow(bundleId, until: now.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSince1970, by: "prompt")
-    state.record(AgentState.Event(at: now.timeIntervalSince1970, bundleId: bundleId,
-                                  action: "unlocked", detail: "passphrase entered, locks after \(minutes) min unfocused"))
-    _ = saveJSON(state, to: store.state)
-    return true
+    let deadline = timeoutSeconds.map { Date().addingTimeInterval(TimeInterval($0)) }
+
+    var wrong = false
+    while true {
+        let alert = NSAlert()
+        alert.messageText = "\(name) is locked"
+        alert.informativeText = wrong
+            ? "That is not the passphrase. Try again, or leave it closed."
+            : "Enter the toolshed passphrase to open it. Nothing else about your setup changes."
+        alert.alertStyle = .warning
+        if let appPath = appPath, !appPath.isEmpty {
+            alert.icon = NSWorkspace.shared.icon(forFile: appPath)
+        }
+
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        field.placeholderString = "passphrase"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Open")
+        alert.addButton(withTitle: "Leave it closed")
+
+        // The dismissal has to survive the modal run loop. `runModal()` runs in
+        // `NSModalPanelRunLoopMode`, so a plain `DispatchQueue.main.asyncAfter`
+        // block is not picked up until somebody clicks — which is the opposite
+        // of a timeout. Registering for every mode the panel can be in is what
+        // makes an unattended prompt actually expire.
+        var timedOut = false
+        var timer: Timer?
+        if let deadline = deadline {
+            let remaining = max(0, deadline.timeIntervalSinceNow)
+            let armed = Timer(timeInterval: remaining, repeats: false) { _ in
+                timedOut = true
+                alert.window.orderOut(nil)
+                NSApp.stopModal()
+            }
+            timer = armed
+            for mode in [RunLoop.Mode.default, .modalPanel, .eventTracking, .common] {
+                RunLoop.main.add(armed, forMode: mode)
+            }
+        }
+
+        let response = alert.runModal()
+        timer?.invalidate()
+
+        if timedOut {
+            logLine("\(bundleId): the passphrase prompt was left unanswered")
+            return false
+        }
+        guard response == .alertFirstButtonReturn else { return false }
+
+        let typed = field.stringValue
+        if let secret = loadJSON(StoredSecret.self, from: store.secret), matches(typed, secret) {
+            var state = loadJSON(AgentState.self, from: store.state) ?? AgentState(updatedAt: 0)
+            let now = Date()
+            state.allow(bundleId, until: now.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSince1970, by: "prompt")
+            state.record(AgentState.Event(at: now.timeIntervalSince1970, bundleId: bundleId,
+                                          action: "unlocked", detail: "passphrase entered, locks after \(minutes) min unfocused"))
+            _ = saveJSON(state, to: store.state)
+            return true
+        }
+        logLine("\(bundleId): wrong passphrase entered at the prompt")
+        wrong = true
+    }
 }
 
 func commandPrompt(_ arguments: [String]) {
