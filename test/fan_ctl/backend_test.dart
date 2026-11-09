@@ -219,6 +219,39 @@ void main() {
         );
       },
     );
+
+    test(
+      'an unconfirmed release still stops the renewal and saves off',
+      () async {
+        // Off has to mean the fans go back to Apple even when nothing on the
+        // wire confirms it: a renewal that kept firing after a failed release
+        // would hold them forever, which is the one outcome turning off must
+        // not have. Stopping the renewal lets the daemon's own lease expire.
+        final daemon = FakeDaemon();
+        final service = backend(daemon);
+        await service.engage(held);
+        daemon.answers = false;
+
+        await expectLater(
+          service.releaseControl(),
+          throwsA(
+            isA<ToolException>().having((e) => e.code, 'code', 'DAEMON_SILENT'),
+          ),
+        );
+
+        daemon.received.clear();
+        await pastRenewal();
+        expect(
+          daemon.received,
+          isEmpty,
+          reason: 'a release the daemon never confirmed kept renewing the hold',
+        );
+        final saved = Map<String, Object?>.from(
+          jsonDecode(policyFile().readAsStringSync()) as Map,
+        );
+        expect(saved['manualOn'], isFalse);
+      },
+    );
   });
 
   group('readConfig', () {

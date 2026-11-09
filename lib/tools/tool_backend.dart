@@ -3,6 +3,7 @@ import '../models/tool_config.dart';
 import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/lock_agent.dart';
+import 'clickup_chat/clickup_models.dart';
 import 'dev_sweeper/sweep_target.dart';
 import 'docker/docker_engine.dart';
 import 'docker/docker_models.dart';
@@ -212,4 +213,24 @@ abstract class AppLockGuard {
 /// over at most [limit] rows.
 abstract class MemoryRanking {
   Future<List<ManagedApp>> ranked({int limit = 100});
+}
+
+/// Backends that can inspect ClickUp Chat and delete messages via the v3 API.
+///
+/// Reads (channels, scan) do not mutate; [removeMessagesByAuthor] deletes
+/// messages through the ClickUp API and is only invoked after explicit user
+/// confirmation in the console. The backend never guesses: author matching is
+/// by exact `user_id` from the API.
+abstract class ClickupChatModerator {
+  Future<List<ClickupChannel>> channels(String workspaceId);
+
+  Future<ClickupRemovalPlan> scanMessages({
+    required String workspaceId,
+    required String channelId,
+    required String authorUserId,
+  });
+
+  Future<ClickupRemovalResult> removeMessagesByAuthor(
+    ClickupRemovalPlan plan,
+  );
 }

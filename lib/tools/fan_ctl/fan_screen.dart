@@ -163,9 +163,7 @@ class _FanScreenState extends State<FanScreen> {
     final didIt = await _act(
       () => widget.registry.releaseFan(_id),
       doing: 'Turning the fans off',
-      outcome: () =>
-          'Fans off. '
-          '${_daemon == null ? 'They are back in macOS\'s control.' : _appliedLine()}',
+      outcome: () => 'Fans off — back in macOS\'s control. ${_appliedLine()}',
     );
     if (didIt && mounted) {
       setState(() => _draft = _draft.copyWith(manualOn: false));

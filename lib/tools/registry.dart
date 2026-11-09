@@ -8,6 +8,8 @@ import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/app_lock_backend.dart';
 import 'app_lock/lock_agent.dart';
+import 'clickup_chat/clickup_backend.dart';
+import 'clickup_chat/clickup_models.dart';
 import 'dev_sweeper/dev_sweeper_backend.dart';
 import 'dev_sweeper/sweep_target.dart';
 import 'docker/docker_backend.dart';
@@ -77,6 +79,7 @@ class ToolRegistry extends ChangeNotifier {
     ToolEntry(backend: _dockerBackend()),
     ToolEntry(backend: _fanBackend()),
     ToolEntry(backend: _appLockBackend()),
+    ToolEntry(backend: _clickupChatBackend()),
   ]);
 
   /// Which backend a tool gets is decided once, here. Windows and Linux get an
@@ -234,6 +237,28 @@ class ToolRegistry extends ChangeNotifier {
           'macOS is an NSWorkspace application handle plus `terminate()`. '
           'Windows and Linux would need a different mechanism entirely, and '
           'none has been written.',
+    );
+  }
+
+  /// ClickUp Chat moderation uses the ClickUp v3 HTTP API and dart:io, so it
+  /// works on every desktop platform. It has no background agent; auth is read
+  /// from the environment.
+  static ToolBackend _clickupChatBackend() {
+    if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
+      return ClickupChatBackend();
+    }
+    return UnsupportedToolBackend(
+      descriptor: const ToolDescriptor(
+        id: kClickupChatId,
+        name: 'ClickUp Chat',
+        summary:
+            'Scans a ClickUp channel and deletes messages by a specific author '
+            'via the ClickUp v3 API, after confirmation.',
+        implPath: 'ClickUp API v3 (chat)',
+      ),
+      reason:
+          'ClickUp Chat moderation needs network access to the ClickUp API and '
+          'is available on desktop platforms.',
     );
   }
 
@@ -623,6 +648,56 @@ class ToolRegistry extends ChangeNotifier {
       return ranking.ranked();
     }
     throw ToolException('NO_RANKING', entry.capabilities.reason);
+  }
+
+  // ClickUp Chat. Reads do not take the busy guard (same as docker inventory);
+  // deletion is destructive and goes through [_ask] with an explicit action.
+
+  Future<List<ClickupChannel>> clickupChannels(String id, String workspaceId) {
+    if (!byId(id)!.capabilities.can(ToolAction.showClickupChat)) {
+      throw ToolException(
+        'UNAVAILABLE',
+        byId(id)?.capabilities.reason ?? 'ClickUp Chat is unavailable.',
+      );
+    }
+    return _clickupAt(id).channels(workspaceId);
+  }
+
+  Future<ClickupRemovalPlan> clickupScan(
+    String id, {
+    required String workspaceId,
+    required String channelId,
+    required String authorUserId,
+  }) {
+    if (!byId(id)!.capabilities.can(ToolAction.showClickupChat)) {
+      throw ToolException(
+        'UNAVAILABLE',
+        byId(id)?.capabilities.reason ?? 'ClickUp Chat is unavailable.',
+      );
+    }
+    return _clickupAt(id).scanMessages(
+      workspaceId: workspaceId,
+      channelId: channelId,
+      authorUserId: authorUserId,
+    );
+  }
+
+  Future<ClickupRemovalResult?> clickupRemoveByAuthor(
+    String id,
+    ClickupRemovalPlan plan,
+  ) => _ask<ClickupRemovalResult>(
+    id,
+    ToolAction.clickupRemoveByAuthor,
+    (b) => _clickupAt(id).removeMessagesByAuthor(plan),
+  );
+
+  ClickupChatModerator _clickupAt(String id) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (entry.backend case final ClickupChatModerator mod) return mod;
+    throw ToolException('NO_CLICKUP_CHAT', entry.capabilities.reason);
   }
 
   // Fan reads. These skip [act] on purpose: a read has no state to serialise,

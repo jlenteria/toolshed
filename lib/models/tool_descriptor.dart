@@ -93,6 +93,15 @@ enum ToolAction {
   /// manager was found, and the console says plainly that it takes every
   /// running container down with it.
   dockerStopEngine,
+
+  /// Open the ClickUp Chat console: scan channels/messages and preview which
+  /// messages belong to a specific author. Reads go to the ClickUp v3 API.
+  showClickupChat,
+
+  /// Delete messages by a specific author in a specific channel via the ClickUp
+  /// v3 API. Destructive: always confirmed in the console with the count and
+  /// author before any request is sent.
+  clickupRemoveByAuthor,
 }
 
 class Capabilities {

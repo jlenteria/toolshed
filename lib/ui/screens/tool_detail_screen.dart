@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/agent_status.dart';
 import '../../models/tool_descriptor.dart';
 import '../../tools/app_lock/lock_screen.dart';
+import '../../tools/clickup_chat/clickup_screen.dart';
 import '../../tools/dev_sweeper/sweep_screen.dart';
 import '../../tools/docker/docker_screen.dart';
 import '../../tools/fan_ctl/fan_screen.dart';
@@ -458,6 +459,18 @@ class _Controls extends StatelessWidget {
       () => Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => DockerScreen(registry: registry, entry: entry),
+        ),
+      ),
+    );
+
+    addSecondary(
+      ToolAction.showClickupChat,
+      Icons.forum_outlined,
+      'Chat moderation',
+      'Scan a channel and delete messages by a specific author (confirmed)',
+      () => Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => ClickupScreen(registry: registry, entry: entry),
         ),
       ),
     );

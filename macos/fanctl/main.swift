@@ -570,14 +570,20 @@ struct Actuator {
         case .success:
             return .success(())
         case .failure(let error):
-            _ = writeAll([("F\(fan)Tg", 0), (smc.modeKey(fan), 0)])
+            _ = release(fan: fan)
             return .failure(error)
         }
     }
 
     func release(fan: Int) -> Result<Void, FanWriteFailure> {
         smc.resolveModeKey(fan)
-        return writeAll([("F\(fan)Tg", 0), (smc.modeKey(fan), 0)])
+        // Best effort, and never a precondition: resetting the target is a
+        // courtesy while we still own the fan, but the only write that hands it
+        // back to Apple is the mode key. A firmware that refuses an rpm of 0 —
+        // or a busy SMC on this one attempt — must not be able to keep a fan
+        // forced after the user asked for it to be Apple's again.
+        _ = smc.write("F\(fan)Tg", 0)
+        return writeAll([(smc.modeKey(fan), 0)])
     }
 
     /// Retries the whole sequence as one unit: half a write landing would leave

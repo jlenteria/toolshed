@@ -254,13 +254,22 @@ class MacOSFanBackend implements ToolBackend, FanControl {
 
   @override
   Future<void> releaseControl() async {
-    await _daemon.clear();
+    // Off means off, and the local half runs before the daemon is asked: if
+    // the daemon cannot be reached, a still-running renewal would keep
+    // re-applying the hold forever — the one outcome 'turn off' must not have.
+    // Without renewals the daemon's own lease expires and the fans go back to
+    // Apple on their own, so releasing locally first is what still hands them
+    // back when nothing confirms the release.
     _active = null;
     _stopRenewal();
-    // The saved file follows the release: "released" and "a policy that pins the
-    // fans again at the next launchd reload" cannot both be true.
-    final saved = await _readPolicyFile();
-    await _writePolicyFile(saved.copyWith(manualOn: false));
+    try {
+      await _daemon.clear();
+    } finally {
+      // "Released" and "a policy that pins the fans again at the next launchd
+      // reload" cannot both be true — not even when the daemon did not answer.
+      final saved = await _readPolicyFile();
+      await _writePolicyFile(saved.copyWith(manualOn: false));
+    }
   }
 
   /// The lease is what keeps a hold honest: it expires unless the app that asked

@@ -10,6 +10,7 @@ IconData toolIcon(String id) => switch (id) {
   'fan_ctl' => Icons.air_rounded,
   'app_lock' => Icons.lock_outline_rounded,
   'docker' => Icons.dns_outlined,
+  'clickup_chat' => Icons.forum_outlined,
   _ => Icons.handyman_outlined,
 };
 
