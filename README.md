@@ -127,24 +127,23 @@ lines for one port, so the link is collapsed to one. A port that is exposed but
 never published (`8080/tcp`) is shown greyed and inert, because nothing on the
 host can reach it.
 
-### fan_ctl — hold a fan at a speed you set (macOS)
+### fan_ctl — manual or temperature-triggered fan control (macOS)
 
-One switch and one number: `Fan manual ON` asks every fan the SMC reports for one
-speed, and flipping it off hands them back. Nothing else.
+`Fan manual ON` asks every fan the SMC reports for one speed. `Fan automatic ON`
+uses the hottest CPU package sensor and applies that same hold when the CPU
+reaches 70 °C, releasing below 65 °C. Manual ON remains an independent override.
 
-Cooling on temperature is deliberately not here. `thermalmonitord` has the
-sensor fleet, the load history and the curves for this exact machine, and a
-threshold typed into a console is a worse second implementation of that rather
-than a supplement to it. So the whole law, in `macos/fanctl/main.swift`:
+The control law lives in `macos/fanctl/main.swift`:
 
 ```
-manualOn ....... hold every fan at policy.holdRpm, clamped into its own range
+manualOn ....... hold every fan at policy.holdRpm, regardless of temperature
+autoOn ......... hold at policy.holdRpm above the CPU ON threshold
 otherwise ...... automatic — the fans are Apple's
 ```
 
-What the tool will not do is answer the machine's heat with its own opinion
-about heat. It answers a request for rpm, and the clamp means it can never ask
-for less cooling than Apple's own idle.
+The automatic OFF threshold is lower than the ON threshold, so temperatures
+near the boundary do not make the fan chatter. The per-fan clamp means the tool
+can never ask for less cooling than Apple's own idle.
 
 **Why there is a daemon.** Reading the System Management Controller needs no
 privilege, and `toolshed-fand telemetry` proves it — fans, their ranges, and
@@ -159,8 +158,8 @@ holding a password prompt open.
   it — and every connection is gated on the peer's uid: root, or the owner of
   `/dev/console`. Nothing else gets an answer.
 - A hold has a **lease**. It survives only while the app renews it, so a crash
-  or a quit cannot leave a fan forced. Now that no temperature can end a hold,
-  the lease is the only thing that hands the fans back by itself.
+  or a quit cannot leave a fan forced. Automatic cooling uses the same safety
+  lease while the app is running.
 - A daemon that starts and finds a fan already forced hands it back to Apple
   before it serves anything, including after a crash respawn.
 - `SIGTERM` releases the fan before the process exits, and `Stop` is a
@@ -173,7 +172,7 @@ The decision law lives in `macos/fanctl/main.swift` and nowhere in Dart. The UI
 shows the rpm the daemon says it applied, never a number it predicted, because
 only one of the two is allowed to be wrong.
 
-**The switch is the only control.** Flipping it on sends one `apply`; flipping it
+**The switches are independent.** Either switch sends an `apply`; turning both
 off sends `clear`. The slider moves the number on screen while it is dragged and
 decides at the end: while a hold is live it re-`apply`s, and while it is not the
 value is only written to the policy file, so no fan moves behind a switch that is
@@ -194,9 +193,9 @@ opens it again for as long as you are using it: the unlock window is an
 watcher closes it again and asks for the passphrase. A stopwatch from the
 passphrase would close an app somebody is in the middle of using. The list is
 **desktop apps only** — a `.app` that does not declare itself background-only,
-or one running with the `.regular` activation policy: ClickUp, Safari, Terminal,
-System Settings, and not the agents and menu-bar extras that have no window to
-close. The guard list is not on the list either: Finder, the Dock, the menu bar
+or one running with the `.regular` activation policy: Safari, Terminal, System
+Settings, and not the agents and menu-bar extras that have no window to close.
+The guard list is not on the list either: Finder, the Dock, the menu bar
 and toolshed are apps the agent will never close, so offering them would be a
 checkbox it refuses to honour. A locked app is always listed, even if it falls
 into either group, so the lock can still be removed.

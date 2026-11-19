@@ -26,18 +26,20 @@ enum FanSensorGroup {
   );
 }
 
-/// A hand on the fan: hold every fan at one speed, or hand them back to Apple.
+/// Fan control policy: an explicit manual hold, an optional CPU-temperature
+/// hold, or Apple's automatic control.
 ///
-/// That is the whole model, and it is deliberately not a control law. There is no
-/// trigger temperature, no ramp and no hysteresis here or in the daemon, because
-/// `thermalmonitord` has the sensor fleet, the load history and the curves for
-/// this exact machine, and a threshold typed into a console loses that argument.
+/// Automatic mode uses a CPU threshold and a lower release threshold in the
+/// daemon. Manual mode remains a direct override.
 ///
 /// The field names are the field names in `Policy` in `macos/fanctl/main.swift`;
 /// the two must stay in step, and `fan_protocol_test` pins the shape.
 class FanPolicy implements ToolConfig {
   const FanPolicy({
     this.manualOn = false,
+    this.autoOn = false,
+    this.autoOnTemperature = 70,
+    this.autoOffTemperature = 65,
     this.holdRpm = 2_400,
     this.leaseSeconds = 30,
   });
@@ -46,6 +48,8 @@ class FanPolicy implements ToolConfig {
   static const double maxHoldRpm = 9_000;
   static const int minLeaseSeconds = 0;
   static const int maxLeaseSeconds = 3_600;
+  static const double minAutoTemperature = 40;
+  static const double maxAutoTemperature = 100;
 
   static const FanPolicy defaults = FanPolicy();
 
@@ -53,6 +57,18 @@ class FanPolicy implements ToolConfig {
   /// whatever the sensors say; off means the fans are Apple's again. It is not a
   /// draft flag — flipping it acts on the hardware through the daemon.
   final bool manualOn;
+
+  /// When true, the daemon holds the fans at [holdRpm] when the hottest CPU
+  /// package sensor reaches [autoOnTemperature]. Manual mode remains separate
+  /// and takes precedence when [manualOn] is true.
+  final bool autoOn;
+
+  /// Temperature at which automatic cooling starts.
+  final double autoOnTemperature;
+
+  /// Temperature below which an automatic hold is released. Keeping this below
+  /// [autoOnTemperature] prevents rapid on/off cycling near the threshold.
+  final double autoOffTemperature;
 
   /// The speed asked of every fan. The number written is clamped into each fan's
   /// own floor and ceiling by the daemon, so a request cannot leave the machine
@@ -74,6 +90,16 @@ class FanPolicy implements ToolConfig {
     if (leaseSeconds < minLeaseSeconds || leaseSeconds > maxLeaseSeconds)
       'The lease must be between ${minLeaseSeconds}s and '
           '${maxLeaseSeconds ~/ 60} minutes.',
+    if (autoOnTemperature < minAutoTemperature ||
+        autoOnTemperature > maxAutoTemperature)
+      'The automatic ON temperature must be between '
+          '${minAutoTemperature.toInt()} and ${maxAutoTemperature.toInt()} °C.',
+    if (autoOffTemperature < minAutoTemperature ||
+        autoOffTemperature > maxAutoTemperature)
+      'The automatic OFF temperature must be between '
+          '${minAutoTemperature.toInt()} and ${maxAutoTemperature.toInt()} °C.',
+    if (autoOffTemperature >= autoOnTemperature)
+      'The automatic OFF temperature must be lower than the ON temperature.',
   ];
 
   @override
@@ -82,6 +108,8 @@ class FanPolicy implements ToolConfig {
   @override
   String get blurb => manualOn
       ? 'all fans held at ${holdRpm.toStringAsFixed(0)} rpm'
+      : autoOn
+      ? 'automatic cooling at ${autoOnTemperature.toStringAsFixed(0)} °C'
       : 'the fans are Apple\'s';
 
   /// Shown under the switch, because what happens when the console closes is the
@@ -97,15 +125,27 @@ class FanPolicy implements ToolConfig {
   FanPolicy heldManually(double rpm) =>
       copyWith(manualOn: true, holdRpm: rpm.clamp(minHoldRpm, maxHoldRpm));
 
-  FanPolicy copyWith({bool? manualOn, double? holdRpm, int? leaseSeconds}) =>
-      FanPolicy(
-        manualOn: manualOn ?? this.manualOn,
-        holdRpm: holdRpm ?? this.holdRpm,
-        leaseSeconds: leaseSeconds ?? this.leaseSeconds,
-      );
+  FanPolicy copyWith({
+    bool? manualOn,
+    bool? autoOn,
+    double? autoOnTemperature,
+    double? autoOffTemperature,
+    double? holdRpm,
+    int? leaseSeconds,
+  }) => FanPolicy(
+    manualOn: manualOn ?? this.manualOn,
+    autoOn: autoOn ?? this.autoOn,
+    autoOnTemperature: autoOnTemperature ?? this.autoOnTemperature,
+    autoOffTemperature: autoOffTemperature ?? this.autoOffTemperature,
+    holdRpm: holdRpm ?? this.holdRpm,
+    leaseSeconds: leaseSeconds ?? this.leaseSeconds,
+  );
 
   Map<String, Object?> toJson() => {
     'manualOn': manualOn,
+    'autoOn': autoOn,
+    'autoOnTemperature': autoOnTemperature,
+    'autoOffTemperature': autoOffTemperature,
     'holdRpm': holdRpm,
     'leaseSeconds': leaseSeconds,
   };
@@ -116,6 +156,9 @@ class FanPolicy implements ToolConfig {
     if (json == null) return defaults;
     return defaults.copyWith(
       manualOn: json['manualOn'] as bool?,
+      autoOn: json['autoOn'] as bool?,
+      autoOnTemperature: (json['autoOnTemperature'] as num?)?.toDouble(),
+      autoOffTemperature: (json['autoOffTemperature'] as num?)?.toDouble(),
       holdRpm: (json['holdRpm'] as num?)?.toDouble(),
       leaseSeconds: (json['leaseSeconds'] as num?)?.toInt(),
     );
@@ -125,14 +168,28 @@ class FanPolicy implements ToolConfig {
   bool operator ==(Object other) =>
       other is FanPolicy &&
       other.manualOn == manualOn &&
+      other.autoOn == autoOn &&
+      other.autoOnTemperature == autoOnTemperature &&
+      other.autoOffTemperature == autoOffTemperature &&
       other.holdRpm == holdRpm &&
       other.leaseSeconds == leaseSeconds;
 
   @override
-  int get hashCode => Object.hash(manualOn, holdRpm, leaseSeconds);
+  int get hashCode => Object.hash(
+    manualOn,
+    autoOn,
+    autoOnTemperature,
+    autoOffTemperature,
+    holdRpm,
+    leaseSeconds,
+  );
 
   @override
   String toString() =>
-      'FanPolicy(${manualOn ? 'manual ${holdRpm}rpm' : 'automatic'}, '
+      'FanPolicy(${manualOn
+          ? 'manual'
+          : autoOn
+          ? 'auto'
+          : 'automatic'}, '
       'lease ${leaseSeconds}s)';
 }

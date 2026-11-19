@@ -38,7 +38,7 @@ void main() {
         isTrue,
         reason: 'Policy must declare its own decoder',
       );
-      expect(RegExp(r'decodeIfPresent').allMatches(swift).length, 3);
+      expect(RegExp(r'decodeIfPresent').allMatches(swift).length, 6);
     });
 
     test('Request is the envelope the client builds', () {

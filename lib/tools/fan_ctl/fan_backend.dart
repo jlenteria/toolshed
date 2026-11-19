@@ -216,11 +216,10 @@ class MacOSFanBackend implements ToolBackend, FanControl {
   /// fan that never spun is the one answer this backend must never give.
   @override
   Future<void> engage(FanPolicy policy) async {
-    if (!policy.manualOn) {
+    if (!policy.manualOn && !policy.autoOn) {
       throw const ToolException(
         'NOT_A_HOLD',
-        'The manual switch is off, so there is nothing to engage. Turn '
-            '"Fan manual ON" on.',
+        'Both fan control switches are off, so there is nothing to engage.',
       );
     }
     final reason = _refusal(policy);

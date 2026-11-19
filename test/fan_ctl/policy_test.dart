@@ -45,6 +45,13 @@ void main() {
       );
       expect(const FanPolicy(leaseSeconds: 3601).problems, isNotEmpty);
     });
+
+    test('requires automatic cooling to have hysteresis', () {
+      expect(
+        const FanPolicy(autoOnTemperature: 70, autoOffTemperature: 70).problems,
+        contains(contains('OFF temperature must be lower')),
+      );
+    });
   });
 
   group('labels', () {
@@ -96,9 +103,12 @@ void main() {
       },
     );
 
-    test('carries exactly the three keys the daemon decodes', () {
+    test('carries exactly the keys the daemon decodes', () {
       expect(FanPolicy.defaults.toJson().keys, [
         'manualOn',
+        'autoOn',
+        'autoOnTemperature',
+        'autoOffTemperature',
         'holdRpm',
         'leaseSeconds',
       ]);
@@ -119,6 +129,12 @@ void main() {
         const FanPolicy().heldManually(9999).holdRpm,
         FanPolicy.maxHoldRpm,
       );
+    });
+
+    test('preserves automatic settings', () {
+      const policy = FanPolicy(autoOn: true, autoOnTemperature: 75);
+      expect(policy.heldManually(3000).autoOn, isTrue);
+      expect(policy.heldManually(3000).autoOnTemperature, 75);
     });
   });
 

@@ -445,6 +445,13 @@ struct Policy: Codable {
     /// [holdRpm] whatever the sensors say. Off hands them back to Apple.
     var manualOn: Bool = false
 
+    /// Hold the fans automatically when the CPU package reaches the ON
+    /// threshold. Manual mode remains independent and takes precedence.
+    var autoOn: Bool = false
+
+    var autoOnTemperature: Double = 70
+    var autoOffTemperature: Double = 65
+
     /// The speed asked of every fan, clamped into each fan's own range on the
     /// way out — see `heldRpm`.
     var holdRpm: Double = 2_400
@@ -457,8 +464,13 @@ struct Policy: Codable {
     /// pins the two together.
     var leaseSeconds: Int = 30
 
-    init(manualOn: Bool = false, holdRpm: Double = 2_400, leaseSeconds: Int = 30) {
+    init(manualOn: Bool = false, autoOn: Bool = false,
+         autoOnTemperature: Double = 70, autoOffTemperature: Double = 65,
+         holdRpm: Double = 2_400, leaseSeconds: Int = 30) {
         self.manualOn = manualOn
+        self.autoOn = autoOn
+        self.autoOnTemperature = autoOnTemperature
+        self.autoOffTemperature = autoOffTemperature
         self.holdRpm = holdRpm
         self.leaseSeconds = leaseSeconds
     }
@@ -470,12 +482,15 @@ struct Policy: Codable {
     init(from decoder: Decoder) throws {
         let box = try decoder.container(keyedBy: CodingKeys.self)
         manualOn = try box.decodeIfPresent(Bool.self, forKey: .manualOn) ?? false
+        autoOn = try box.decodeIfPresent(Bool.self, forKey: .autoOn) ?? false
+        autoOnTemperature = try box.decodeIfPresent(Double.self, forKey: .autoOnTemperature) ?? 70
+        autoOffTemperature = try box.decodeIfPresent(Double.self, forKey: .autoOffTemperature) ?? 65
         holdRpm = try box.decodeIfPresent(Double.self, forKey: .holdRpm) ?? 2_400
         leaseSeconds = try box.decodeIfPresent(Int.self, forKey: .leaseSeconds) ?? 30
     }
 
     private enum CodingKeys: String, CodingKey {
-        case manualOn, holdRpm, leaseSeconds
+        case manualOn, autoOn, autoOnTemperature, autoOffTemperature, holdRpm, leaseSeconds
     }
 
     /// How far the asked speed has to move before the registers are rewritten.
@@ -497,22 +512,40 @@ struct Decision {
 ///
 /// There is no temperature in it and nothing to damp between two states: the
 /// answer is the switch and a number.
-func decide(policy: Policy, fan: Fan) -> Decision {
-    guard policy.manualOn else {
+func decide(policy: Policy, fan: Fan, cpuTemperature: Double? = nil,
+            autoHolding: Bool = false) -> Decision {
+    if policy.manualOn {
+        let wanted = heldRpm(policy: policy, fan: fan)
+        guard wanted != policy.holdRpm else {
+            return Decision(state: .holding(rpm: wanted),
+                            reason: String(format: "manual override: holding at %.0f rpm", wanted))
+        }
+        return Decision(
+            state: .holding(rpm: wanted),
+            reason: String(format: "manual override: %.0f rpm asked, fan %d only turns %.0f to %.0f",
+                           policy.holdRpm, fan.id, fan.minRpm, fan.maxRpm))
+    }
+
+    let automatic = policy.autoOn && (cpuTemperature.map {
+        $0 >= policy.autoOnTemperature || (autoHolding && $0 > policy.autoOffTemperature)
+    } ?? false)
+    guard automatic else {
         return Decision(state: .automatic,
-                        reason: "the manual switch is off; the fans are Apple's")
+                        reason: policy.autoOn
+                            ? String(format: "CPU is below the automatic threshold (%.0f °C)", policy.autoOnTemperature)
+                            : "automatic cooling and the manual switch are off")
     }
     let wanted = heldRpm(policy: policy, fan: fan)
     guard wanted != policy.holdRpm else {
         return Decision(state: .holding(rpm: wanted),
-                        reason: String(format: "manual override: holding at %.0f rpm", wanted))
+                        reason: String(format: "automatic cooling: CPU at %.1f °C", cpuTemperature ?? 0))
     }
     // Saying so out loud is the point: a speed the console offered and the fan
     // refused is a fact the person at the switch should see, not a silent clamp.
     return Decision(
         state: .holding(rpm: wanted),
-        reason: String(format: "manual override: %.0f rpm asked, fan %d only turns %.0f to %.0f",
-                       policy.holdRpm, fan.id, fan.minRpm, fan.maxRpm))
+        reason: String(format: "automatic cooling: CPU at %.1f °C; fan %d only turns %.0f to %.0f",
+                       cpuTemperature ?? 0, fan.id, fan.minRpm, fan.maxRpm))
 }
 
 /// The rpm for one fan, clamped into what that fan can physically do. The lower
@@ -744,8 +777,8 @@ func runKeys(prefix: String, json: Bool) -> Int32 {
     return 0
 }
 
-/// The decision table. `flutter test` runs this, so the hold is covered without
-/// a machine that has a fan.
+/// The decision table. `make fanctl` runs this, so manual and automatic holds
+/// are covered without a machine that has a fan.
 func runSelfCheck(json: Bool) -> Int32 {
     var failures: [String] = []
     var checks = 0
@@ -756,6 +789,7 @@ func runSelfCheck(json: Bool) -> Int32 {
     let smallFan = Fan(id: 1, name: "Fan 1", actualRpm: 900, minRpm: 2_000, maxRpm: 4_000,
                        targetRpm: 900, mode: 0, modeKey: "F1Md")
     let manual = Policy(manualOn: true)
+    let automatic = Policy(autoOn: true)
 
     func check(_ label: String, _ got: Decision, _ want: ControlState) {
         checks += 1
@@ -766,6 +800,20 @@ func runSelfCheck(json: Bool) -> Int32 {
 
     check("switch off, hands the fans back", decide(policy: Policy(), fan: fan), .automatic)
     check("switch on, holds", decide(policy: manual, fan: fan), .holding(rpm: manual.holdRpm))
+    check("automatic stays off below the CPU threshold",
+          decide(policy: automatic, fan: fan, cpuTemperature: 69), .automatic)
+    check("automatic holds at the CPU threshold",
+          decide(policy: automatic, fan: fan, cpuTemperature: 70),
+          .holding(rpm: automatic.holdRpm))
+    check("automatic hysteresis keeps a running fan on",
+          decide(policy: automatic, fan: fan, cpuTemperature: 66, autoHolding: true),
+          .holding(rpm: automatic.holdRpm))
+    check("automatic releases below its lower threshold",
+          decide(policy: automatic, fan: fan, cpuTemperature: 65, autoHolding: true),
+          .automatic)
+    check("manual remains an override over automatic",
+          decide(policy: Policy(manualOn: true, autoOn: true), fan: fan, cpuTemperature: 20),
+          .holding(rpm: manual.holdRpm))
     // A second fan whose range sits elsewhere: the hold is judged per fan, so a
     // speed that fits is asked for exactly and needs no clamping.
     check("a second fan is judged on its own range",
@@ -917,6 +965,7 @@ final class Controller {
             reportFailure("this Mac reports no fans, so there is nothing to hold")
             return
         }
+        let cpuTemperature = groupMaximums(smc.temperatureSensors())[SensorGroup.cpu.rawValue]
         var reasons: [String] = []
         // Every fan is judged on its own: the same request lands differently on a
         // fan with a different range, and a hold that stops at fan 0 because fan 1
@@ -926,7 +975,9 @@ final class Controller {
                 reportFailure("fan \(fanId) is not readable")
                 continue
             }
-            let decision = decide(policy: policy, fan: fan)
+            let decision = decide(policy: policy, fan: fan,
+                                  cpuTemperature: cpuTemperature,
+                                  autoHolding: held[fanId] != nil)
             reasons.append(decision.reason)
             switch decision.state {
             case .automatic:

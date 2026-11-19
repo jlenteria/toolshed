@@ -15,13 +15,12 @@ import 'fan_daemon.dart';
 import 'fan_policy.dart';
 import 'fan_telemetry.dart';
 
-/// The fan console, and it has exactly two controls: a switch and a number.
+/// The fan console keeps manual control and temperature-triggered control
+/// separate. Manual mode remains the explicit override.
 ///
-/// There is no temperature in here on purpose. Deciding when a machine needs
-/// cooling is macOS's job — `thermalmonitord` has the sensor fleet and the
-/// curves for this model — so this screen only ever answers "how fast, while I
-/// say so". The rpm shown is the daemon's, and every control exists only once
-/// the daemon answers on its socket.
+/// The daemon reads the CPU package temperature and owns the automatic control
+/// law. The rpm shown is the daemon's, and every control exists only once the
+/// daemon answers on its socket.
 class FanScreen extends StatefulWidget {
   const FanScreen({super.key, required this.registry, required this.entry});
 
@@ -161,13 +160,51 @@ class _FanScreenState extends State<FanScreen> {
       return;
     }
     final didIt = await _act(
-      () => widget.registry.releaseFan(_id),
-      doing: 'Turning the fans off',
-      outcome: () => 'Fans off — back in macOS\'s control. ${_appliedLine()}',
+      () => _draft.autoOn
+          ? widget.registry.engageFan(_id, _draft.copyWith(manualOn: false))
+          : widget.registry.releaseFan(_id),
+      doing: 'Turning manual fan control off',
+      outcome: () => _draft.autoOn
+          ? 'Manual control off — automatic temperature control remains on. ${_appliedLine()}'
+          : 'Fans off — back in macOS\'s control. ${_appliedLine()}',
     );
     if (didIt && mounted) {
       setState(() => _draft = _draft.copyWith(manualOn: false));
     }
+  }
+
+  Future<void> _setAutomatic(bool on) async {
+    final entry = widget.entry;
+    if (on) {
+      if (_daemon == null && entry.capabilities.can(ToolAction.start)) {
+        await _act(
+          () => widget.registry.start(_id),
+          doing: 'Starting the fan daemon',
+          outcome: () => 'The daemon is up.',
+        );
+        if (!mounted) return;
+      }
+      final policy = _draft.copyWith(autoOn: true);
+      final didIt = await _act(
+        () => widget.registry.engageFan(_id, policy),
+        doing: 'Enabling automatic fan control',
+        outcome: () =>
+            'Automatic cooling enabled at ${policy.autoOnTemperature.toStringAsFixed(0)} °C.',
+      );
+      if (didIt && mounted) setState(() => _draft = policy);
+      return;
+    }
+    final didIt = await _act(
+      () => _draft.manualOn
+          ? widget.registry.engageFan(_id, _draft.copyWith(autoOn: false))
+          : widget.registry.releaseFan(_id),
+      doing: 'Turning automatic fan control off',
+      outcome: () => _draft.manualOn
+          ? 'Automatic control off — manual control remains on. ${_appliedLine()}'
+          : 'Fans off — back in macOS\'s control. ${_appliedLine()}',
+    );
+    if (didIt && mounted)
+      setState(() => _draft = _draft.copyWith(autoOn: false));
   }
 
   /// Whether the fans are being held right now. With a manual-only policy the
@@ -259,6 +296,7 @@ class _FanScreenState extends State<FanScreen> {
             fansReported: _telemetry.fans.isNotEmpty,
             busy: entry.busy,
             onToggle: _setManual,
+            onToggleAutomatic: _setAutomatic,
             onDragRpm: _dragRpm,
             onCommitRpm: _commitRpm,
             appliedLine: _appliedLine(),
@@ -301,10 +339,10 @@ class _FanScreenState extends State<FanScreen> {
             CapabilityNotice(capabilities: entry.capabilities),
           const SizedBox(height: 10),
           Text(
-            'A fan write from your own uid is refused by the kernel, so holding '
-            'needs the root daemon above. Cooling on temperature is left to '
-            'macOS: this tool only ever holds, and only above the fan\'s own '
-            'idle floor.',
+            'A fan write from your own uid is refused by the kernel, so control '
+            'needs the root daemon above. Automatic cooling uses the hottest CPU '
+            'package sensor: it turns on at ${_draft.autoOnTemperature.toStringAsFixed(0)} °C '
+            'and releases below ${_draft.autoOffTemperature.toStringAsFixed(0)} °C.',
             style: theme.textTheme.bodySmall?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -325,6 +363,7 @@ class _HoldCard extends StatelessWidget {
     required this.fansReported,
     required this.busy,
     required this.onToggle,
+    required this.onToggleAutomatic,
     required this.onDragRpm,
     required this.onCommitRpm,
     required this.appliedLine,
@@ -337,6 +376,7 @@ class _HoldCard extends StatelessWidget {
   final bool fansReported;
   final bool busy;
   final ValueChanged<bool> onToggle;
+  final ValueChanged<bool> onToggleAutomatic;
   final ValueChanged<double> onDragRpm;
   final ValueChanged<double> onCommitRpm;
   final String appliedLine;
@@ -358,6 +398,19 @@ class _HoldCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            SwitchListTile(
+              value: draft.autoOn,
+              onChanged: busy ? null : onToggleAutomatic,
+              title: const Text('Fan automatic ON'),
+              subtitle: Text(
+                draft.autoOn
+                    ? 'On — turns on at ${draft.autoOnTemperature.toStringAsFixed(0)} °C CPU temperature and releases below ${draft.autoOffTemperature.toStringAsFixed(0)} °C.'
+                    : 'Off. Enable it to react to CPU temperature automatically.',
+                style: theme.textTheme.bodySmall,
+              ),
+              contentPadding: EdgeInsets.zero,
+            ),
+            const Divider(height: 18),
             SwitchListTile(
               value: live,
               onChanged: busy ? null : onToggle,
