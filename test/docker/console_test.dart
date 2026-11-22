@@ -14,6 +14,16 @@ class _FakeRunner extends ProcessRunner {
   _FakeRunner();
 
   final List<List<String>> calls = [];
+  final List<List<String>> streams = [];
+
+  @override
+  Stream<String> streamLines(String executable, List<String> arguments) {
+    streams.add(arguments);
+    if (arguments.first == 'logs') {
+      return Stream<String>.fromIterable(['GET / 200', 'listening on :8080']);
+    }
+    return const Stream<String>.empty();
+  }
 
   @override
   Future<ProcResult> run(
@@ -326,6 +336,43 @@ void main() {
       isTrue,
     );
     expect(find.textContaining('Opened http://localhost:8080'), findsOneWidget);
+  });
+
+  testWidgets('a container row opens a live log view for its ports', (
+    tester,
+  ) async {
+    final runner = _FakeRunner();
+    final registry = ToolRegistry.forBackends([
+      DockerBackend(
+        runner: runner,
+        dockerPath: _cli,
+        engineDiscover: () => null,
+      ),
+    ]);
+    final entry = registry.byId('docker')!;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: DockerScreen(registry: registry, entry: entry),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Follow web logs'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Logs · web'), findsOneWidget);
+    expect(find.text('GET / 200'), findsOneWidget);
+    expect(find.text('listening on :8080'), findsOneWidget);
+    // The port the developer was looking at travels into the log header.
+    expect(find.textContaining('8080 → 80/tcp'), findsOneWidget);
+    expect(runner.streams.single, [
+      'logs',
+      '--follow',
+      '--tail',
+      '200',
+      'a1b2c3d4e5f6aa11',
+    ]);
   });
 
   testWidgets('the engine Start/Stop button is disabled while the read loads', (

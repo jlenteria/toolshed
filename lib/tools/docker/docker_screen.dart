@@ -7,6 +7,7 @@ import '../../ui/widgets/console_parts.dart';
 import '../../ui/widgets/status_style.dart';
 import '../registry.dart';
 import 'docker_engine.dart';
+import 'docker_logs_screen.dart';
 import 'docker_models.dart';
 
 /// Containers and images read from the `docker` CLI on demand, with the safe
@@ -172,6 +173,20 @@ class _DockerScreenState extends State<DockerScreen> {
               'The tool was busy with another request. Try again in a moment.',
         ),
         duration: Duration(seconds: result == null ? 8 : 4),
+      ),
+    );
+  }
+
+  /// Opens the live log view for [container]. Logs are per container, so the
+  /// port being debugged is reached through the container that publishes it.
+  void _openLogs(DockerContainer container) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DockerLogsScreen(
+          registry: widget.registry,
+          toolId: _toolId,
+          container: container,
+        ),
       ),
     );
   }
@@ -357,12 +372,14 @@ class _DockerScreenState extends State<DockerScreen> {
                   busy: _acting.contains(container.id),
                   ops: _opsFor(container),
                   canOpenPorts: _caps.can(ToolAction.dockerOpenPort),
+                  canLogs: _caps.can(ToolAction.dockerLogs),
                   onPrimary: () => _run(
                     container,
                     container.isRunning ? DockerOp.stop : DockerOp.start,
                   ),
                   onMore: (op) => _run(container, op),
                   onOpenPort: _openPort,
+                  onLogs: () => _openLogs(container),
                 ),
               ],
             ],
@@ -419,18 +436,22 @@ class _ContainerRow extends StatelessWidget {
     required this.busy,
     required this.ops,
     required this.canOpenPorts,
+    required this.canLogs,
     required this.onPrimary,
     required this.onMore,
     required this.onOpenPort,
+    required this.onLogs,
   });
 
   final DockerContainer container;
   final bool busy;
   final List<DockerOp> ops;
   final bool canOpenPorts;
+  final bool canLogs;
   final VoidCallback onPrimary;
   final ValueChanged<DockerOp> onMore;
   final ValueChanged<DockerPortMapping> onOpenPort;
+  final VoidCallback onLogs;
 
   IconData get _primaryIcon =>
       container.isRunning ? Icons.stop_circle_outlined : Icons.play_circle_fill;
@@ -520,6 +541,12 @@ class _ContainerRow extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (canLogs)
+            IconButton(
+              tooltip: 'Follow ${container.primaryName} logs',
+              icon: const Icon(Icons.receipt_long_outlined),
+              onPressed: busy ? null : onLogs,
+            ),
           IconButton(
             tooltip:
                 '${container.isRunning ? 'Stop' : 'Start'} ${container.primaryName}',

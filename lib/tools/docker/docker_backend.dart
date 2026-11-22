@@ -96,7 +96,8 @@ class DockerBackend implements ToolBackend, DockerManager {
     name: 'Docker',
     summary:
         'Lists your containers and images and lets you start, stop, restart or '
-        'remove a container and prune dangling images, through the docker CLI.',
+        'remove a container, follow its logs, and prune dangling images, '
+        'through the docker CLI.',
     implPath: 'docker',
   );
 
@@ -128,6 +129,7 @@ class DockerBackend implements ToolBackend, DockerManager {
         ToolAction.dockerRemove,
         ToolAction.dockerPrune,
         ToolAction.dockerOpenPort,
+        ToolAction.dockerLogs,
       },
       // Bringing the engine up or down is a manager's job, advertised whenever
       // one is installed — including when the daemon is currently off.
@@ -145,7 +147,8 @@ class DockerBackend implements ToolBackend, DockerManager {
                 'stop, restart, remove and prune send the matching docker '
                 'command to whatever context the CLI currently points at; the '
                 'engine decides whether each one succeeds. A published port '
-                'opens in the browser.'
+                'opens in the browser, and a container\'s own stdout and stderr '
+                'can be followed live.'
                 '${engine == null ? '' : ' Starting or stopping the engine runs '
                           '${engine.label}\'s own command.'}'
           : 'No docker CLI was found yet, but ${engine!.label} is installed '
@@ -334,6 +337,22 @@ class DockerBackend implements ToolBackend, DockerManager {
       );
     }
     return DockerActionResult(message: 'Opened $url.');
+  }
+
+  /// `docker logs --follow` for one container. Logs are per container, not per
+  /// port, so the port a developer is debugging is reached through the
+  /// container that publishes it. The last 200 lines give the view context
+  /// immediately instead of starting blank.
+  @override
+  Stream<String> containerLogs(DockerContainer container) async* {
+    final cli = _cli;
+    yield* _runner.streamLines(cli, [
+      'logs',
+      '--follow',
+      '--tail',
+      '200',
+      container.id,
+    ]);
   }
 
   /// The platform's own "open this URL in the default browser" command. macOS

@@ -20,6 +20,7 @@ class _FakeRunner extends ProcessRunner {
   final ProcResult Function(List<String> arguments) answer;
   final List<List<String>> calls = [];
   final List<String> executables = [];
+  final List<List<String>> streams = [];
 
   @override
   Future<ProcResult> run(
@@ -31,6 +32,12 @@ class _FakeRunner extends ProcessRunner {
     executables.add(executable);
     calls.add(arguments);
     return answer(arguments);
+  }
+
+  @override
+  Stream<String> streamLines(String executable, List<String> arguments) {
+    streams.add(arguments);
+    return const Stream<String>.empty();
   }
 }
 
@@ -122,6 +129,7 @@ void main() {
       expect(caps.can(ToolAction.dockerRemove), isTrue);
       expect(caps.can(ToolAction.dockerPrune), isTrue);
       expect(caps.can(ToolAction.dockerOpenPort), isTrue);
+      expect(caps.can(ToolAction.dockerLogs), isTrue);
     });
 
     test('no CLI on disk and none discovered means nothing to gate on', () {
@@ -298,6 +306,24 @@ void main() {
         );
       },
     );
+  });
+
+  group('container logs', () {
+    final web = const DockerContainer(id: 'a1b2c3d4e5f6', names: ['web']);
+
+    test('follows the last 200 lines of the named container', () async {
+      final runner = _FakeRunner(_healthy);
+      final lines = await backend(runner).containerLogs(web).toList();
+
+      expect(runner.streams.single, [
+        'logs',
+        '--follow',
+        '--tail',
+        '200',
+        'a1b2c3d4e5f6',
+      ]);
+      expect(lines, isEmpty);
+    });
   });
 
   group('open port', () {

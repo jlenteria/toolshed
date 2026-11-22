@@ -411,6 +411,23 @@ class ToolRegistry extends ChangeNotifier {
     throw ToolException('NO_DOCKER', byId(id)?.capabilities.reason ?? '');
   });
 
+  /// Follows one container's own stdout and stderr. A read-shaped stream, so it
+  /// skips the busy guard; cancelling the subscription kills the docker child,
+  /// which is what closing the log view does.
+  Stream<String> dockerLogs(String id, DockerContainer container) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(ToolAction.dockerLogs)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    if (entry.backend case final DockerManager docker) {
+      return docker.containerLogs(container);
+    }
+    throw ToolException('NO_DOCKER', entry.capabilities.reason);
+  }
+
   /// The engine manager that can be started/stopped here, for labelling the
   /// button. A read with no side effect, and it does not go through the busy
   /// guard: knowing what owns the engine is not an action on it. Null when

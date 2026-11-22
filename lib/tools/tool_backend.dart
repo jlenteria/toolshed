@@ -119,6 +119,11 @@ abstract class DockerManager {
   /// reaches it) — the console only offers this for a published mapping.
   Future<DockerActionResult> openPort(DockerPortMapping port);
 
+  /// Follows [container]'s own stdout and stderr — `docker logs --follow` —
+  /// starting from its last 200 lines. Cancelling the returned subscription
+  /// stops the child, so closing the log view leaves no `docker` process behind.
+  Stream<String> containerLogs(DockerContainer container);
+
   /// The program that can start or stop the engine behind the CLI, when one is
   /// installed. This is a synchronous "what is on disk" answer, deliberately
   /// independent of whether the daemon is currently answering: an engine that is

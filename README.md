@@ -127,6 +127,15 @@ lines for one port, so the link is collapsed to one. A port that is exposed but
 never published (`8080/tcp`) is shown greyed and inert, because nothing on the
 host can reach it.
 
+**Following a container's logs.** Every container row has a log button that
+opens a live view of that container's stdout and stderr —
+`docker logs --follow --tail 200 <id>` — with pause, clear and selectable lines.
+Logs belong to the container, not to a port, so the ports are carried into the
+log header: finding a container by the port it publishes and opening its logs is
+one step. Closing the page cancels the subscription, which kills the `docker`
+child, so a log view never leaves a follower running. A stopped container still
+shows its last 200 lines and then reports that it has ended.
+
 ### fan_ctl — manual or temperature-triggered fan control (macOS)
 
 `Fan manual ON` asks every fan the SMC reports for one speed. `Fan automatic ON`

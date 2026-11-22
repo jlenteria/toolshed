@@ -73,6 +73,79 @@ class ProcessRunner {
     );
   }
 
+  /// Starts [executable] and yields its stdout and stderr as lines until the
+  /// process exits or the subscription is cancelled.
+  ///
+  /// Both pipes are merged because container logs are written to whichever one
+  /// the program chose, and a log view that dropped stderr would hide the half
+  /// that usually matters. Cancelling the subscription kills the child, so a
+  /// closed `docker logs --follow` view cannot leave a process behind. A
+  /// non-zero exit throws after the last line, carrying stderr, so a failed
+  /// follow never looks like a quiet one.
+  Stream<String> streamLines(String executable, List<String> arguments) async* {
+    Process child;
+    try {
+      child = await Process.start(
+        executable,
+        arguments,
+        environment: _childEnvironment,
+        runInShell: false,
+      );
+    } on ProcessException catch (e) {
+      throw ToolException(
+        'EXEC_FAILED',
+        'Could not run $executable: ${e.message}',
+        detail: 'message: ${e.message}\nexecutable: ${e.executable}\n',
+      );
+    }
+
+    final merged = StreamController<String>();
+    final stderr = StringBuffer();
+    var open = 2;
+    void drained() {
+      // Close only after both pipes are done, not when the exit code arrives:
+      // the last chunk can land a moment later.
+      if (--open == 0 && !merged.isClosed) merged.close();
+    }
+
+    final out = child.stdout
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .transform(const LineSplitter())
+        .listen(merged.add, onError: merged.addError, onDone: drained);
+    final err = child.stderr
+        .transform(const Utf8Decoder(allowMalformed: true))
+        .transform(const LineSplitter())
+        .listen(
+          (line) {
+            stderr.writeln(line);
+            merged.add(line);
+          },
+          onError: merged.addError,
+          onDone: drained,
+        );
+
+    try {
+      await for (final line in merged.stream) {
+        yield line;
+      }
+      final code = await child.exitCode;
+      if (code != 0) {
+        final text = stderr.toString().trim();
+        throw ToolException(
+          'COMMAND_FAILED',
+          text.isEmpty ? '$executable ${arguments.join(' ')} failed.' : text,
+          detail:
+              'command: $executable ${arguments.join(' ')}\nexit code: $code',
+        );
+      }
+    } finally {
+      child.kill(ProcessSignal.sigkill);
+      await out.cancel();
+      await err.cancel();
+      if (!merged.isClosed) await merged.close();
+    }
+  }
+
   /// [run] with a stdin, for the one kind of argument that must not be one.
   ///
   /// `ps` shows every process's argv to every user on the machine, so a

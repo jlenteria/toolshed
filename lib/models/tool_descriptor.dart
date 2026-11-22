@@ -83,6 +83,11 @@ enum ToolAction {
   /// was found to read the ports through, since only a published port offers it.
   dockerOpenPort,
 
+  /// Follow one container's stdout and stderr with `docker logs --follow`.
+  /// Logs belong to the container, so the port a developer is debugging is
+  /// reached through the container that publishes it.
+  dockerLogs,
+
   /// Start the engine itself through whichever manager owns it — `colima
   /// start`, `orbctl start` or opening Docker Desktop — so a stopped daemon
   /// can be brought back from the console instead of a terminal. Advertised
@@ -93,7 +98,6 @@ enum ToolAction {
   /// manager was found, and the console says plainly that it takes every
   /// running container down with it.
   dockerStopEngine,
-
 }
 
 class Capabilities {
