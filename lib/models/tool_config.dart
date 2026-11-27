@@ -5,6 +5,8 @@
 /// backend knows how to put its own concrete config on disk. Two tools, two
 /// shapes of settings, one code path in the registry.
 abstract class ToolConfig {
+  const ToolConfig();
+
   /// Every reason this config must not be written, in the order the user should
   /// read them.
   List<String> get problems;

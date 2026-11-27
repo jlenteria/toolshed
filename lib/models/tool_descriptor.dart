@@ -98,6 +98,21 @@ enum ToolAction {
   /// manager was found, and the console says plainly that it takes every
   /// running container down with it.
   dockerStopEngine,
+
+  /// Compile the selected sketch for the selected board with `arduino-cli`.
+  arduinoCompile,
+
+  /// Upload the compiled sketch to the selected board and port.
+  arduinoUpload,
+
+  /// Follow the selected port's serial output at the configured baud rate.
+  arduinoSerial,
+
+  /// Open the primary `.ino` in the built-in editor and save it back.
+  arduinoEdit,
+
+  /// Create a new sketch folder through `arduino-cli sketch new`.
+  arduinoNewSketch,
 }
 
 class Capabilities {

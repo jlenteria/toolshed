@@ -108,14 +108,13 @@ class ProcessRunner {
       if (--open == 0 && !merged.isClosed) merged.close();
     }
 
-    final out = child.stdout
-        .transform(const Utf8Decoder(allowMalformed: true))
-        .transform(const LineSplitter())
-        .listen(merged.add, onError: merged.addError, onDone: drained);
-    final err = child.stderr
-        .transform(const Utf8Decoder(allowMalformed: true))
-        .transform(const LineSplitter())
-        .listen(
+    final out = _outputChunks(
+      child.stdout.transform(const Utf8Decoder(allowMalformed: true)),
+    ).listen(merged.add, onError: merged.addError, onDone: drained);
+    final err =
+        _outputChunks(
+          child.stderr.transform(const Utf8Decoder(allowMalformed: true)),
+        ).listen(
           (line) {
             stderr.writeln(line);
             merged.add(line);
@@ -139,11 +138,87 @@ class ProcessRunner {
         );
       }
     } finally {
+      // Some CLIs are supervisors rather than the process that owns the
+      // resource. `arduino-cli monitor`, for example, starts a
+      // `serial-monitor` child which keeps the device open after only the
+      // parent is killed. Stop direct children first, then the command itself,
+      // so cancelling a stream reliably releases ports and other resources.
+      await _killChildren(child.pid);
       child.kill(ProcessSignal.sigkill);
       await out.cancel();
       await err.cancel();
       if (!merged.isClosed) await merged.close();
     }
+  }
+
+  Future<void> _killChildren(int parentPid) async {
+    try {
+      await Process.run(
+        'pkill',
+        <String>['-TERM', '-P', '$parentPid'],
+        environment: _childEnvironment,
+        runInShell: false,
+      );
+    } on Object {
+      // Process cleanup is best effort. The parent is still killed by the
+      // caller, and platforms without `pkill` should not turn cancellation
+      // into a new error.
+    }
+  }
+
+  /// Splits normal lines immediately, but also flushes output that has no
+  /// newline every 100 ms. Serial devices commonly send a prompt or status
+  /// byte without a trailing newline; waiting for one makes a live monitor
+  /// look stuck even though the child is receiving data.
+  Stream<String> _outputChunks(Stream<String> input) {
+    final controller = StreamController<String>(sync: true);
+    var buffer = '';
+    Timer? timer;
+    late StreamSubscription<String> subscription;
+
+    void flushPartial() {
+      if (buffer.isEmpty || controller.isClosed) return;
+      controller.add(buffer);
+      buffer = '';
+    }
+
+    void addText(String text) {
+      buffer += text;
+      var start = 0;
+      for (var index = 0; index < buffer.length; index++) {
+        final code = buffer.codeUnitAt(index);
+        if (code != 10 && code != 13) continue;
+        if (index > start) controller.add(buffer.substring(start, index));
+        if (code == 13 &&
+            index + 1 < buffer.length &&
+            buffer.codeUnitAt(index + 1) == 10) {
+          index++;
+        }
+        start = index + 1;
+      }
+      buffer = buffer.substring(start);
+      timer ??= Timer.periodic(
+        const Duration(milliseconds: 100),
+        (_) => flushPartial(),
+      );
+    }
+
+    controller.onListen = () {
+      subscription = input.listen(
+        addText,
+        onError: controller.addError,
+        onDone: () {
+          timer?.cancel();
+          flushPartial();
+          controller.close();
+        },
+      );
+    };
+    controller.onCancel = () {
+      timer?.cancel();
+      return subscription.cancel();
+    };
+    return controller.stream;
   }
 
   /// [run] with a stdin, for the one kind of argument that must not be one.

@@ -136,6 +136,41 @@ one step. Closing the page cancels the subscription, which kills the `docker`
 child, so a log view never leaves a follower running. A stopped container still
 shows its last 200 lines and then reports that it has ended.
 
+### arduino — a lightweight bench for the board on your desk
+
+**Arduino Bench** drives the `arduino-cli` you already have, on macOS, Linux and
+Windows, and adds nothing to it: no bundled toolchain, no second compiler, no
+daemon. It reads the sketchbook the CLI reports, lists the sketches in it, and
+opens a `.ino` in a small monospace editor with save, discard and a dirty-state
+guard. A new sketch is created with `arduino-cli sketch new`, so the folder and
+its primary file have the names the CLI expects.
+
+The board and port pickers are the CLI's own answers. `board list --json` says
+which ports are present and which board each one identifies; `board listall --json`
+says which boards the installed platforms can build for. Choosing a
+detected port fills in its FQBN, because a board that is plugged in is a better
+default than a board you have to remember. **Compile** and **Upload** send the
+selected FQBN and port to `arduino-cli` and stream the compiler's own output into
+the console, including its errors. Nothing is translated into a friendlier
+failure: the last line the tool prints is the last line the CLI said.
+
+The **serial monitor** is deliberately read-only. It follows one port at the
+chosen baud with `arduino-cli monitor`, keeps the last 5,000 lines selectable,
+and stops following when the page closes — cancelling the subscription kills the
+child, so no monitor is left holding the port. Writing to a board's serial port
+is a different feature with a different failure mode, and this bench does not
+pretend to have it. Baud rates are the conventional ones from 300 to 2,000,000.
+
+The sketch, board, port and baud are remembered in
+`arduino.json` under the platform's config directory, so reopening the tool puts
+you back on the same target. With no `arduino-cli` on `PATH` — or in the usual
+Homebrew and `/usr/local/bin` locations a Dock-launched app would otherwise miss
+— the tool is still listed, as *helper not found* with the reason and no action
+buttons. A failed port read is a real error, because a board that is plugged in
+but unreadable is not the same as no board; the optional reads (the full board
+list, the installed cores, the CLI version) degrade to notes so one old command
+cannot blank the page.
+
 ### fan_ctl — manual or temperature-triggered fan control (macOS)
 
 `Fan manual ON` asks every fan the SMC reports for one speed. `Fan automatic ON`
@@ -368,6 +403,14 @@ lib/
       docker_parsers.dart     the `--format json` grammars of ps, images, df
       docker_backend.dart     finds the docker CLI, sends it commands, reports back
       docker_screen.dart      the console
+    arduino/                ditto, for the board:
+      arduino_models.dart     a board, a port, a core, a sketch, an inventory
+      arduino_config.dart     the selected sketch, board, port and baud
+      arduino_parsers.dart    the board, core and sketchbook grammars
+      arduino_backend.dart    finds arduino-cli, sends compile/upload/monitor
+      arduino_screen.dart     the console
+      arduino_sketch_screen.dart  the .ino editor
+      arduino_serial_screen.dart  the read-only monitor
     fan_ctl/                ditto, for the fan:
       fan_policy.dart         the switch, the speed, the lease
       fan_telemetry.dart      fans, sensors and the group maxima
@@ -402,6 +445,8 @@ test/
   dev_sweeper/              parsers, locations, Trash, scanners, console
   docker/                   parsers, backend, engine-manager discovery, and the
                             console over a fake docker CLI and a fake Colima
+  arduino/                  parsers, backend over a fake CLI, console, serial
+                            monitor and the .ino editor
   platform/                 where an installed app looks for its helpers
   fixtures/                 canned `launchctl` output
 ```
@@ -417,8 +462,9 @@ adding a folder and one line in `registry.dart`.
 sockets implements `PortInspector`, one that can find and move cache directories
 implements `CacheSweeper`, one that can hold a fan implements `FanControl`, one
 that can keep apps shut implements `AppLockGuard`, one that drives a Docker
-engine implements `DockerManager`, and the UI asks the interface before it draws
-a button. `Capabilities` is the answer it draws from.
+engine implements `DockerManager`, one that compiles and follows an Arduino
+board implements `ArduinoWorkbench`, and the UI asks the interface before it
+draws a button. `Capabilities` is the answer it draws from.
 
 ## Tests
 

@@ -164,6 +164,74 @@ class Paths {
     ];
   }
 
+  /// The `arduino-cli` binary, wherever it was installed — or `null` when there
+  /// is none.
+  ///
+  /// [which] already covers the environment's `PATH` and the well-known bin
+  /// directories a Dock launch strips, which is where a Homebrew or distro
+  /// install lives. The extra candidates cover the per-user installers that put
+  /// the CLI under `~/.local/bin` or `%LOCALAPPDATA%`, so a user who followed
+  /// the official install script is found without adding a directory to `PATH`.
+  static String? arduinoCliBinary() {
+    final found = which('arduino-cli');
+    if (found != null) return found;
+    for (final candidate in arduinoCliCandidates()) {
+      if (File(candidate).existsSync()) return candidate;
+    }
+    return null;
+  }
+
+  static List<String> arduinoCliCandidates() {
+    if (Platform.isWindows) {
+      final localAppData = Platform.environment['LOCALAPPDATA'];
+      final appData = Platform.environment['APPDATA'];
+      return [
+        if (localAppData != null)
+          '$localAppData\\Programs\\arduino-cli\\arduino-cli.exe',
+        if (appData != null) '$appData\\Programs\\arduino-cli\\arduino-cli.exe',
+        r'C:\Program Files\arduino-cli\arduino-cli.exe',
+        '$home\\bin\\arduino-cli.exe',
+      ];
+    }
+    if (Platform.isMacOS) {
+      return [
+        '/opt/homebrew/bin/arduino-cli',
+        '/usr/local/bin/arduino-cli',
+        '$home/.local/bin/arduino-cli',
+        '$home/bin/arduino-cli',
+        '/usr/bin/arduino-cli',
+      ];
+    }
+    return [
+      '/usr/local/bin/arduino-cli',
+      '/usr/bin/arduino-cli',
+      '/snap/bin/arduino-cli',
+      '$home/.local/bin/arduino-cli',
+      '$home/bin/arduino-cli',
+    ];
+  }
+
+  /// The directory a cross-platform tool writes its own state to.
+  ///
+  /// macOS keeps the same Application Support folder the agents use; Linux and
+  /// Windows follow their own conventions so a tool that runs there does not
+  /// leave a macOS-shaped path behind. This is only for this app's own settings,
+  /// never for a helper that launchd or a service manager must read.
+  static Directory get configHome {
+    if (Platform.isWindows) {
+      final appData = Platform.environment['APPDATA'];
+      return Directory('${appData ?? '$home\\AppData\\Roaming'}\\toolshed');
+    }
+    if (Platform.isLinux) {
+      final xdg = Platform.environment['XDG_CONFIG_HOME'];
+      return Directory('${xdg ?? '$home/.config'}/toolshed');
+    }
+    return appSupport;
+  }
+
+  /// The Arduino console's working set: sketch, board, port and baud.
+  static File get arduinoConfigFile => File('${configHome.path}/arduino.json');
+
   static String get home {
     if (_home != null) return _home!;
     final env = Platform.environment;

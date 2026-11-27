@@ -3,6 +3,8 @@ import '../models/tool_config.dart';
 import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/lock_agent.dart';
+import 'arduino/arduino_config.dart';
+import 'arduino/arduino_models.dart';
 import 'dev_sweeper/sweep_target.dart';
 import 'docker/docker_engine.dart';
 import 'docker/docker_models.dart';
@@ -217,4 +219,34 @@ abstract class AppLockGuard {
 /// over at most [limit] rows.
 abstract class MemoryRanking {
   Future<List<ManagedApp>> ranked({int limit = 100});
+}
+
+/// Backends that drive an Arduino toolchain through `arduino-cli`.
+///
+/// The console owns no compiler, uploader or serial implementation: it hands
+/// the CLI a sketch, a board and a port and shows what the CLI printed. The
+/// streams are long-lived children — cancelling a compile or monitor
+/// subscription kills the process — so a closed view never leaves one behind.
+abstract class ArduinoWorkbench {
+  /// Ports, installed platforms, sketches and the CLI version as they are now.
+  Future<ArduinoInventory> inventory();
+
+  /// Creates a new sketch in the sketchbook through `arduino-cli sketch new`.
+  Future<ArduinoSketch> newSketch(String name);
+
+  /// The primary `.ino` of the sketch at [path], which may be a folder or a
+  /// file. Refuses a path that is not a sketch rather than reading a stray file.
+  Future<ArduinoSketchFile> readSketch(String path);
+
+  /// Saves [contents] back to the sketch's primary `.ino`.
+  Future<void> writeSketch(String path, String contents);
+
+  /// `arduino-cli compile`, streamed line by line.
+  Stream<String> compile(ArduinoConfig config);
+
+  /// `arduino-cli upload`, streamed line by line.
+  Stream<String> upload(ArduinoConfig config);
+
+  /// `arduino-cli monitor` at [baud], streamed until cancelled.
+  Stream<String> monitor(String port, int baud);
 }

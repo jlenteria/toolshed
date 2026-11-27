@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/agent_status.dart';
 import '../../models/tool_descriptor.dart';
 import '../../tools/app_lock/lock_screen.dart';
+import '../../tools/arduino/arduino_screen.dart';
 import '../../tools/dev_sweeper/sweep_screen.dart';
 import '../../tools/docker/docker_screen.dart';
 import '../../tools/fan_ctl/fan_screen.dart';
@@ -392,6 +393,7 @@ class _Controls extends StatelessWidget {
 
     final fan = entry.backend is FanControl;
     final lock = entry.backend is AppLockGuard;
+    final arduino = entry.backend is ArduinoWorkbench;
 
     addSecondary(
       ToolAction.reapNow,
@@ -464,30 +466,39 @@ class _Controls extends StatelessWidget {
 
     addSecondary(
       ToolAction.configure,
-      switch ((fan, lock)) {
-        (true, _) => Icons.settings_input_component,
-        (_, true) => Icons.lock_person_outlined,
+      switch ((fan, lock, arduino)) {
+        (true, _, _) => Icons.settings_input_component,
+        (_, true, _) => Icons.lock_person_outlined,
+        (_, _, true) => Icons.developer_board,
         _ => Icons.tune_rounded,
       },
-      switch ((fan, lock)) {
-        (true, _) => 'Fan control',
-        (_, true) => 'App lock console',
+      switch ((fan, lock, arduino)) {
+        (true, _, _) => 'Fan control',
+        (_, true, _) => 'App lock console',
+        (_, _, true) => 'Arduino workbench',
         _ => 'Settings',
       },
-      switch ((fan, lock)) {
-        (true, _) => 'The manual switch and the speed it holds',
-        (_, true) => 'What is watching, what is locked, and the passphrase',
+      switch ((fan, lock, arduino)) {
+        (true, _, _) => 'The manual switch and the speed it holds',
+        (_, true, _) => 'What is watching, what is locked, and the passphrase',
+        (_, _, true) =>
+          'Sketch, board, port, compile, upload and serial monitor',
         _ => 'Thresholds and agent options',
       },
-      switch ((fan, lock)) {
-        (true, _) => () => Navigator.of(context).push(
+      switch ((fan, lock, arduino)) {
+        (true, _, _) => () => Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => FanScreen(registry: registry, entry: entry),
           ),
         ),
-        (_, true) => () => Navigator.of(context).push(
+        (_, true, _) => () => Navigator.of(context).push(
           MaterialPageRoute<void>(
             builder: (_) => LockScreen(registry: registry, entry: entry),
+          ),
+        ),
+        (_, _, true) => () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => ArduinoScreen(registry: registry, entry: entry),
           ),
         ),
         _ => guard(() async {

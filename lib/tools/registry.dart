@@ -8,6 +8,9 @@ import '../models/tool_descriptor.dart';
 import '../models/tool_exception.dart';
 import 'app_lock/app_lock_backend.dart';
 import 'app_lock/lock_agent.dart';
+import 'arduino/arduino_backend.dart';
+import 'arduino/arduino_config.dart';
+import 'arduino/arduino_models.dart';
 import 'dev_sweeper/dev_sweeper_backend.dart';
 import 'dev_sweeper/sweep_target.dart';
 import 'docker/docker_backend.dart';
@@ -75,6 +78,7 @@ class ToolRegistry extends ChangeNotifier {
     ToolEntry(backend: _portWardenBackend()),
     ToolEntry(backend: _devSweeperBackend()),
     ToolEntry(backend: _dockerBackend()),
+    ToolEntry(backend: _arduinoBackend()),
     ToolEntry(backend: _fanBackend()),
     ToolEntry(backend: _appLockBackend()),
   ]);
@@ -185,6 +189,32 @@ class ToolRegistry extends ChangeNotifier {
           'Docker runs on the machine that owns the engine. A sandboxed '
           'platform has no docker CLI, no daemon and no context to talk to, so '
           'this tool is for the desktop.',
+    );
+  }
+
+  /// The Arduino workbench is driven by `arduino-cli`, which runs on every
+  /// desktop, so each desktop gets a real backend. On every one of them the
+  /// backend itself reports `helperMissing` when no CLI is found, so the tool is
+  /// listed with a reason rather than dead buttons. Any other platform is
+  /// excluded: it has no USB serial ports and no toolchain to drive.
+  static ToolBackend _arduinoBackend() {
+    if (Platform.isMacOS || Platform.isLinux || Platform.isWindows) {
+      return ArduinoBackend();
+    }
+    return UnsupportedToolBackend(
+      descriptor: const ToolDescriptor(
+        id: kArduinoId,
+        name: 'Arduino Bench',
+        summary:
+            'A lightweight Arduino IDE: pick a sketch, board and port, compile '
+            'and upload it, and follow the serial monitor, through arduino-cli.',
+        implPath: 'arduino-cli',
+      ),
+      reason:
+          'Arduino Bench drives arduino-cli against the USB serial ports and '
+          'board platforms installed on a desktop. A sandboxed platform has no '
+          'toolchain, no ports and no compiler to reach, so this tool is for '
+          'the desktop.',
     );
   }
 
@@ -477,6 +507,133 @@ class ToolRegistry extends ChangeNotifier {
     }
     if (entry.backend case final DockerManager docker) return docker;
     throw ToolException('NO_DOCKER', entry.capabilities.reason);
+  }
+
+  /// The Arduino console. The reads skip the busy guard — they change nothing —
+  /// while the two writes (a new sketch and a saved file) go through [act] so a
+  /// second tap cannot race the first.
+  Future<ArduinoInventory> arduinoInventory(String id) =>
+      _arduinoAt(id).inventory();
+
+  /// The remembered sketch, board, port and baud. A read, so it can run while
+  /// the tool is being refreshed.
+  Future<ArduinoConfig> arduinoConfig(String id) async {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(ToolAction.configure)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    final config = await entry.backend.readConfig();
+    return config is ArduinoConfig ? config : const ArduinoConfig();
+  }
+
+  /// Null when the sketch could not be created at all ([ToolEntry.error] says
+  /// why); otherwise the folder and file the CLI made.
+  Future<ArduinoSketch?> arduinoNewSketch(String id, String name) =>
+      _ask<ArduinoSketch>(
+        id,
+        ToolAction.arduinoNewSketch,
+        (b) => _arduino(b, id).newSketch(name),
+      );
+
+  Future<ArduinoSketchFile> arduinoReadSketch(String id, String path) =>
+      _arduinoAt(id).readSketch(path);
+
+  Future<bool> arduinoSaveSketch(String id, String path, String contents) =>
+      act(
+        id,
+        ToolAction.arduinoEdit,
+        (b) => _arduino(b, id).writeSketch(path, contents),
+      );
+
+  /// Settings are this console's own working set, not a toolchain action, so a
+  /// selection change writes the file directly rather than taking the busy guard
+  /// that a compile is holding. The entry's cached config is updated in place so
+  /// the tool card's blurb follows along.
+  Future<bool> arduinoSaveConfig(String id, ArduinoConfig config) async {
+    final entry = byId(id);
+    if (entry == null) return false;
+    if (!entry.capabilities.can(ToolAction.configure)) {
+      entry.error = entry.capabilities.reason;
+      notifyListeners();
+      return false;
+    }
+    try {
+      await entry.backend.writeConfig(config);
+      entry.config = config;
+      entry.error = null;
+      notifyListeners();
+      return true;
+    } on ToolException catch (error) {
+      entry.error = 'save settings: $error';
+      notifyListeners();
+      return false;
+    } catch (error) {
+      entry.error = 'save settings: unexpected failure — $error';
+      notifyListeners();
+      return false;
+    }
+  }
+
+  /// `arduino-cli compile`, streamed. A read-shaped stream like the docker log
+  /// follow: cancelling the subscription kills the child, so closing the console
+  /// does not leave a compiler running.
+  Stream<String> arduinoCompile(String id, ArduinoConfig config) =>
+      _arduinoStream(
+        id,
+        ToolAction.arduinoCompile,
+        (workbench) => workbench.compile(config),
+      );
+
+  Stream<String> arduinoUpload(String id, ArduinoConfig config) =>
+      _arduinoStream(
+        id,
+        ToolAction.arduinoUpload,
+        (workbench) => workbench.upload(config),
+      );
+
+  Stream<String> arduinoSerial(String id, String port, int baud) =>
+      _arduinoStream(
+        id,
+        ToolAction.arduinoSerial,
+        (workbench) => workbench.monitor(port, baud),
+      );
+
+  Stream<String> _arduinoStream(
+    String id,
+    ToolAction action,
+    Stream<String> Function(ArduinoWorkbench workbench) body,
+  ) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(action)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    return body(_arduino(entry.backend, id));
+  }
+
+  ArduinoWorkbench _arduinoAt(String id) {
+    final entry = byId(id);
+    if (entry == null) {
+      throw ToolException('NO_TOOL', 'There is no tool called "$id".');
+    }
+    if (!entry.capabilities.can(ToolAction.configure)) {
+      throw ToolException('UNAVAILABLE', entry.capabilities.reason);
+    }
+    return _arduino(entry.backend, id);
+  }
+
+  ArduinoWorkbench _arduino(ToolBackend backend, String id) {
+    if (backend case final ArduinoWorkbench workbench) return workbench;
+    throw ToolException(
+      'NO_ARDUINO',
+      byId(id)?.capabilities.reason ??
+          'This tool does not drive an Arduino toolchain, so nothing was run.',
+    );
   }
 
   /// The caches and node_modules as they were measured at scan time. A read, so

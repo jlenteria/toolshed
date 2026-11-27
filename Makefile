@@ -89,6 +89,9 @@ build-macos:
 # /tmp instead of deleting it.
 install-macos: build-macos
 	@test -d $(STAGED) || { echo "no bundle at $(STAGED)"; exit 1; }
+	@for pid in $$(pgrep -f "/Applications/$(APP).app/Contents/MacOS/$(APP)" || true); do \
+		pkill -TERM -P $$pid 2>/dev/null || true; \
+	done
 	-pkill -f "/Applications/$(APP).app/Contents/MacOS/$(APP)"
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
 		pgrep -f "/Applications/$(APP).app/Contents/MacOS/$(APP)" >/dev/null \
